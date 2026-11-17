@@ -1,0 +1,57 @@
+{
+  "_comment": "Example providers file for `airouter provider import providers.json`. Use the CLI's `bootstrap` command instead if you want the curated free-pool catalog. This file is for hand-curated lists where you want full control over model ids and limits.",
+
+  "providers": [
+    {
+      "name": "groq-llama-3.3-70b",
+      "kind": "openai",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "model": "llama-3.3-70b-versatile",
+      "priority": 10,
+      "rpm": 30,
+      "rpd": 1000,
+      "tpm": 6000,
+      "workers": 3,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "gemini-2.0-flash",
+      "kind": "openai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_env": "GEMINI_API_KEY",
+      "model": "gemini-2.0-flash",
+      "priority": 20,
+      "rpm": 15,
+      "rpd": 1500,
+      "tpm": 1000000,
+      "workers": 2,
+      "reset_tz": "America/Los_Angeles"
+    },
+
+    {
+      "name": "gemma-3-27b",
+      "kind": "openai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_env": "GEMINI_API_KEY",
+      "model": "gemma-3-27b-it",
+      "priority": 30,
+      "rpm": 30,
+      "rpd": 1500,
+      "tpm": 1000000,
+      "workers": 2,
+      "reset_tz": "America/Los_Angeles",
+      "json_mode": false,
+      "system_role": false
+    },
+
+    {
+      "name": "ollama-local",
+      "kind": "ollama",
+      "model": "gemma3:4b",
+      "priority": 90,
+      "workers": 1
+    }
+  ]
+}
