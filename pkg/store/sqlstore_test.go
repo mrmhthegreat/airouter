@@ -12,7 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 func openSQL(t *testing.T, path string) *SQLStore {

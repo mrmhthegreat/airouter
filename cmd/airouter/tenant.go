@@ -8,7 +8,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 // cmdTenant implements `airouter tenant add NAME [-limit N] [-tz ZONE] | airouter tenant list`.

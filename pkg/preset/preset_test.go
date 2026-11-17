@@ -3,7 +3,7 @@ package preset
 import (
 	"testing"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 func TestApplyFillsDefaults(t *testing.T) {

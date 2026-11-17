@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 // Store is the persistence interface used by the router. Methods are grouped:
@@ -26,7 +26,7 @@ import (
 type Store interface {
 	// Tenants -------------------------------------------------------------
 	CreateTenant(ctx context.Context, t types.Tenant, keyHash string) error
-	TenantByID(ctx context.Context, id string) (*types.Tenant, error)       // nil, nil when missing
+	TenantByID(ctx context.Context, id string) (*types.Tenant, error) // nil, nil when missing
 	TenantByKeyHash(ctx context.Context, hash string) (*types.Tenant, error)
 	ListTenants(ctx context.Context) ([]types.Tenant, error)
 

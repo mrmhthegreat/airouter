@@ -5,12 +5,12 @@
 package main
 
 import (
-        "errors"
-        "fmt"
-        "os"
-        "time"
+	"errors"
+	"fmt"
+	"os"
+	"time"
 
-        "github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 const usageText = `airouter — route prompts across free AI providers (Groq, Gemini, Ollama,
@@ -34,66 +34,66 @@ Output:   defaults to text when stdout is a pipe, pretty when interactive;
           -json / -envelope / -text override. Run 'airouter <command> -h' for flags.`
 
 func main() {
-        if len(os.Args) < 2 {
-                fmt.Println(usageText)
-                os.Exit(2)
-        }
-        cmd, args := os.Args[1], os.Args[2:]
-        var err error
-        switch cmd {
-        case "ask":
-                err = cmdAsk(args)
-        case "speak":
-                err = cmdSpeak(args)
-        case "transcribe":
-                err = cmdTranscribe(args)
-        case "serve":
-                err = cmdServe(args)
-        case "provider":
-                err = cmdProvider(args)
-        case "tenant":
-                err = cmdTenant(args)
-        case "usage":
-                err = cmdUsage(args)
-        case "presets":
-                err = cmdPresets(args)
-        case "free-pool":
-                err = cmdFreePool(args)
-        case "bootstrap":
-                err = cmdBootstrap(args)
-        case "-h", "--help", "help":
-                fmt.Println(usageText)
-        default:
-                fmt.Println(usageText)
-                os.Exit(2)
-        }
-        if err != nil {
-                printError(err)
-                os.Exit(1)
-        }
+	if len(os.Args) < 2 {
+		fmt.Println(usageText)
+		os.Exit(2)
+	}
+	cmd, args := os.Args[1], os.Args[2:]
+	var err error
+	switch cmd {
+	case "ask":
+		err = cmdAsk(args)
+	case "speak":
+		err = cmdSpeak(args)
+	case "transcribe":
+		err = cmdTranscribe(args)
+	case "serve":
+		err = cmdServe(args)
+	case "provider":
+		err = cmdProvider(args)
+	case "tenant":
+		err = cmdTenant(args)
+	case "usage":
+		err = cmdUsage(args)
+	case "presets":
+		err = cmdPresets(args)
+	case "free-pool":
+		err = cmdFreePool(args)
+	case "bootstrap":
+		err = cmdBootstrap(args)
+	case "-h", "--help", "help":
+		fmt.Println(usageText)
+	default:
+		fmt.Println(usageText)
+		os.Exit(2)
+	}
+	if err != nil {
+		printError(err)
+		os.Exit(1)
+	}
 }
 
 // printError turns router errors into helpful stderr output. The error types
 // carry useful structured info (which providers, why, when to retry) that we
 // surface here.
 func printError(err error) {
-        var ex *types.ExhaustedError
-        var af *types.AllFailedError
-        var tl *types.TenantLimitError
-        switch {
-        case errors.As(err, &ex):
-                fmt.Fprintf(os.Stderr, "error: all providers are limited right now. Retry in %s\n", ex.RetryAfter.Round(time.Second))
-                for n, why := range ex.Reasons {
-                        fmt.Fprintf(os.Stderr, "  - %s: %s\n", n, why)
-                }
-        case errors.As(err, &af):
-                fmt.Fprintln(os.Stderr, "error: every provider failed")
-                for _, a := range af.Attempts {
-                        fmt.Fprintf(os.Stderr, "  - %s: %s\n", a.Provider, a.Error)
-                }
-        case errors.As(err, &tl):
-                fmt.Fprintf(os.Stderr, "error: tenant daily limit reached; resets in %s\n", tl.RetryAfter.Round(time.Minute))
-        default:
-                fmt.Fprintln(os.Stderr, "error:", err)
-        }
+	var ex *types.ExhaustedError
+	var af *types.AllFailedError
+	var tl *types.TenantLimitError
+	switch {
+	case errors.As(err, &ex):
+		fmt.Fprintf(os.Stderr, "error: all providers are limited right now. Retry in %s\n", ex.RetryAfter.Round(time.Second))
+		for n, why := range ex.Reasons {
+			fmt.Fprintf(os.Stderr, "  - %s: %s\n", n, why)
+		}
+	case errors.As(err, &af):
+		fmt.Fprintln(os.Stderr, "error: every provider failed")
+		for _, a := range af.Attempts {
+			fmt.Fprintf(os.Stderr, "  - %s: %s\n", a.Provider, a.Error)
+		}
+	case errors.As(err, &tl):
+		fmt.Fprintf(os.Stderr, "error: tenant daily limit reached; resets in %s\n", tl.RetryAfter.Round(time.Minute))
+	default:
+		fmt.Fprintln(os.Stderr, "error:", err)
+	}
 }

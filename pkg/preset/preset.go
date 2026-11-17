@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 // Definition fills in base_url / key env var / sensible flags for one provider.

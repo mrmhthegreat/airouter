@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 // cmdSpeak implements `airouter speak [flags] TEXT`.
@@ -17,9 +17,10 @@ import (
 // play raw WAV bytes from stdout.
 //
 // Examples:
-//   airouter speak -o hello.wav "Hello world"
-//   airouter speak -voice Kore -provider gemini-tts-gemini-3.8-flash-tts "Hello"
-//   airouter speak -o arabic.wav -voice hassan "مرحبا بالعالم"
+//
+//	airouter speak -o hello.wav "Hello world"
+//	airouter speak -voice Kore -provider gemini-tts-gemini-3.8-flash-tts "Hello"
+//	airouter speak -o arabic.wav -voice hassan "مرحبا بالعالم"
 func cmdSpeak(args []string) error {
 	fs := flag.NewFlagSet("speak", flag.ExitOnError)
 	db := dbFlag(fs)

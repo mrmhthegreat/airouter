@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/you/airouter/pkg/types"
+	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 func TestMemoryStoreRoundTrip(t *testing.T) {

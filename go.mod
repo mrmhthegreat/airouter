@@ -1,6 +1,4 @@
-// Module github.com/you/airouter — replace `you` with your GitHub username
-// before publishing. Set GOPRIVATE if you fork to a private repo.
-module github.com/you/airouter
+module github.com/mrmhthegreat/airouter
 
 go 1.22
 
