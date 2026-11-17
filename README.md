@@ -40,7 +40,7 @@ fails over to the next one before your code even notices.
 ## Quick start
 
 ```bash
-git clone https://github.com/you/airouter && cd airouter
+git clone https://github.com/mrmhthegreat/airouter && cd airouter
 make build                                        # CGO + mattn/go-sqlite3 (fastest)
 # or: CGO_ENABLED=0 make build                   # pure-Go SQLite (no C compiler needed)
 
@@ -327,10 +327,10 @@ import (
     "database/sql"
     _ "github.com/mattn/go-sqlite3"
 
-    "github.com/you/airouter/pkg/router"
-    "github.com/you/airouter/pkg/server"
-    "github.com/you/airouter/pkg/store"
-    "github.com/you/airouter/pkg/types"
+    "github.com/mrmhthegreat/airouter/pkg/router"
+    "github.com/mrmhthegreat/airouter/pkg/server"
+    "github.com/mrmhthegreat/airouter/pkg/store"
+    "github.com/mrmhthegreat/airouter/pkg/types"
 )
 
 db, _ := sql.Open("sqlite3", "file:airouter.db?_busy_timeout=5000&_journal_mode=WAL")
@@ -379,7 +379,7 @@ pkg/server/           HTTP handler
 examples/             runnable usage examples (shell + Go)
 ```
 
-Module path is `github.com/you/airouter` — replace `you` with your username
+Module path is `github.com/mrmhthegreat/airouter` — replace `you` with your username
 before publishing.
 
 ## Limits and honest notes
