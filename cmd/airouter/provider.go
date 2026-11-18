@@ -14,23 +14,28 @@ import (
 	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
-// cmdProvider implements `airouter provider add|list|rm|enable|disable|reset|import`.
+// cmdProvider implements `airouter provider add|list|rm|enable|disable|reset|set-key|import`.
 func cmdProvider(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: airouter provider add|list|rm|enable|disable|reset|import")
+		return errors.New("usage: airouter provider add|list|rm|enable|disable|reset|set-key|import")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("provider "+sub, flag.ExitOnError)
 	db := dbFlag(fs)
 	var p types.ProviderConfig
-	var noJSON, noSystem bool
+	var noJSON, noSystem, keyStdin bool
+	var setKeyFlag string
+	if sub == "set-key" {
+		fs.StringVar(&setKeyFlag, "key", "", "the new API key (omit to be asked)")
+	}
 	if sub == "add" {
 		fs.StringVar(&p.Preset, "preset", "", "preset: "+strings.Join(preset.Names(), ", "))
 		fs.StringVar(&p.Name, "name", "", "unique name (default: preset-model)")
 		fs.StringVar(&p.Kind, "kind", "", "openai | ollama")
 		fs.StringVar(&p.BaseURL, "base-url", "", "API base url")
 		fs.StringVar(&p.APIKeyEnv, "key-env", "", "env var holding the API key")
-		fs.StringVar(&p.APIKey, "key", "", "API key stored in the database (prefer -key-env)")
+		fs.StringVar(&p.APIKey, "key", "", "API key to store (encrypted) in the database; omit and use -key-stdin to avoid shell history")
+		fs.BoolVar(&keyStdin, "key-stdin", false, "read the API key from stdin")
 		fs.StringVar(&p.Model, "model", "", "exact model id")
 		fs.StringVar(&p.TenantID, "tenant", "", "restrict to one tenant (default: shared by all)")
 		fs.StringVar(&p.ResetTZ, "tz", "", "IANA timezone of the daily reset (e.g. America/Los_Angeles)")
@@ -68,13 +73,20 @@ func cmdProvider(args []string) error {
 		if noSystem {
 			p.SystemRole = &f
 		}
+		if keyStdin {
+			k, err := readSecret("", "API key")
+			if err != nil {
+				return err
+			}
+			p.APIKey = k
+		}
 		if err := r.SaveProvider(ctx, &p); err != nil {
 			return err
 		}
 		fmt.Printf("added provider #%d %q (%s)\n", p.ID, p.Name, p.Model)
 	case "list":
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tCAT\tNAME\tMODEL\tSTATE\tUSED/RPD\tRPM\tTPM\tAUDIO SEC (ASH/ASD)\tRESETS IN\tTZ")
+		fmt.Fprintln(tw, "ID\tCAT\tNAME\tMODEL\tSTATE\tKEY\tUSED/RPD\tRPM\tTPM\tAUDIO SEC (ASH/ASD)\tRESETS IN\tTZ")
 		for _, s := range r.Status(ctx, "") {
 			rpd := "-"
 			if s.RPD > 0 {
@@ -92,11 +104,24 @@ func cmdProvider(args []string) error {
 				}
 				audioCol = fmt.Sprintf("%d/%s/%s", s.AudioSecToday, ashStr, asdStr)
 			}
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d/%s\t%d\t%d\t%s\t%s\t%s\n",
-				s.ID, s.Category, s.Name, s.Model, s.State, s.UsedToday, rpd, s.RPM, s.TPM,
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%d/%s\t%d\t%d\t%s\t%s\t%s\n",
+				s.ID, s.Category, s.Name, s.Model, s.State, s.KeySource, s.UsedToday, rpd, s.RPM, s.TPM,
 				audioCol, fmtDur(s.ResetsInSec), s.ResetTZ)
 		}
 		tw.Flush()
+	case "set-key":
+		id, err := idArg()
+		if err != nil {
+			return err
+		}
+		k, err := readSecret(setKeyFlag, "New API key")
+		if err != nil {
+			return err
+		}
+		if err := r.SetProviderKey(ctx, id, k); err != nil {
+			return err
+		}
+		fmt.Printf("key stored (encrypted) for provider #%d; any pause was lifted\n", id)
 	case "rm":
 		id, err := idArg()
 		if err != nil {

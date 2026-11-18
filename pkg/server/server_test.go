@@ -339,3 +339,73 @@ func fakeSTTProvider(t *testing.T, wantText string) *httptest.Server {
 	t.Cleanup(s.Close)
 	return s
 }
+
+func TestOpenAICompatibleAPI(t *testing.T) {
+	up := fakeProvider(t, "hello from upstream")
+	r := newTestRouter(t)
+	srv := httptest.NewServer(NewHandler(r, "admin"))
+	t.Cleanup(srv.Close)
+	_, m, _ := do(t, srv, "POST", "/v1/tenants", "admin", `{"id":"app"}`)
+	key := m["api_key"].(string)
+	do(t, srv, "POST", "/v1/providers", "admin", `{"preset":"openai","name":"up","base_url":"`+up.URL+`","api_key":"k","model":"gpt-x"}`)
+
+	c, m, body := do(t, srv, "POST", "/v1/chat/completions", key,
+		`{"model":"auto","messages":[{"role":"developer","content":"be brief"},{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	ch := m["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
+	if c != 200 || ch["content"] != "hello from upstream" || m["object"] != "chat.completion" {
+		t.Fatalf("chat: %d %s", c, body)
+	}
+	// Pin by exact model id; unknown model -> 404 in OpenAI error shape.
+	if c, _, _ := do(t, srv, "POST", "/v1/chat/completions", key, `{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}`); c != 200 {
+		t.Fatalf("pin by model id: %d", c)
+	}
+	c, m, _ = do(t, srv, "POST", "/v1/chat/completions", key, `{"model":"nope","messages":[{"role":"user","content":"hi"}]}`)
+	if c != 404 || m["error"].(map[string]any)["type"] != "model_not_found" {
+		t.Fatalf("unknown model: %d %v", c, m)
+	}
+	// Unsupported features say so instead of silently misbehaving.
+	if c, _, _ := do(t, srv, "POST", "/v1/chat/completions", key, `{"tools":[{}],"messages":[{"role":"user","content":"x"}]}`); c != 400 {
+		t.Fatalf("tools: %d", c)
+	}
+	// No messages is the caller's error: 400, not 500/502.
+	if c, _, _ := do(t, srv, "POST", "/v1/chat/completions", key, `{"messages":[]}`); c != 400 {
+		t.Fatalf("empty: %d", c)
+	}
+	if c, _, _ := do(t, srv, "POST", "/v1/chat/completions", "bad", `{}`); c != 401 {
+		t.Fatalf("auth: %d", c)
+	}
+	// Streaming wire format.
+	_, _, sse := do(t, srv, "POST", "/v1/chat/completions", key, `{"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if !strings.Contains(sse, "chat.completion.chunk") || !strings.HasSuffix(strings.TrimSpace(sse), "data: [DONE]") {
+		t.Fatalf("sse: %q", sse)
+	}
+	// /v1/models lists auto + the model.
+	if _, _, b := do(t, srv, "GET", "/v1/models", key, ""); !strings.Contains(b, `"auto"`) || !strings.Contains(b, "gpt-x") {
+		t.Fatalf("models: %s", b)
+	}
+	// Rotate: old key dies, new works.
+	_, m, _ = do(t, srv, "POST", "/v1/tenants/app/rotate-key", "admin", "")
+	if c, _, _ := do(t, srv, "GET", "/v1/models", key, ""); c != 401 {
+		t.Fatalf("old key still works: %d", c)
+	}
+	if c, _, _ := do(t, srv, "GET", "/v1/models", m["api_key"].(string), ""); c != 200 {
+		t.Fatalf("new key: %d", c)
+	}
+	// The UI is served.
+	if c, _, b := do(t, srv, "GET", "/", "", ""); c != 200 || !strings.Contains(b, "<title>airouter</title>") {
+		t.Fatalf("ui: %d", c)
+	}
+}
+
+func TestErrorMapping(t *testing.T) {
+	for err, want := range map[error]int{
+		types.ErrTenantDisabled: 403, types.ErrUnknownTenant: 401, types.ErrUnauthorized: 401,
+		types.ErrNoProviders: 503, types.ErrTimeout: 504, types.ErrBadRequest: 400,
+		&types.ExhaustedError{}: 503, &types.TenantLimitError{}: 429, &types.AllFailedError{}: 502,
+		&types.BadRequestError{Message: "x"}: 400,
+	} {
+		if got, _, _ := mapErr(err); got != want {
+			t.Errorf("%v: got %d want %d", err, got, want)
+		}
+	}
+}

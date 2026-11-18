@@ -11,10 +11,10 @@ import (
 	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
-// cmdTenant implements `airouter tenant add NAME [-limit N] [-tz ZONE] | airouter tenant list`.
+// cmdTenant implements `airouter tenant add NAME [-limit N] [-tz ZONE] | airouter tenant list | airouter tenant rotate NAME`.
 func cmdTenant(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: airouter tenant add NAME [-limit N] [-tz ZONE] | airouter tenant list")
+		return errors.New("usage: airouter tenant add NAME [-limit N] [-tz ZONE] | airouter tenant list | airouter tenant rotate NAME")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("tenant "+sub, flag.ExitOnError)
@@ -37,6 +37,15 @@ func cmdTenant(args []string) error {
 			return err
 		}
 		fmt.Printf("tenant %q created.\nAPI key (shown once): %s\n", t.ID, key)
+	case "rotate":
+		if fs.NArg() == 0 {
+			return errors.New("give a tenant id, e.g. airouter tenant rotate acme")
+		}
+		key, err := r.RotateTenantKey(ctx, fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("new API key for %q (shown once; the old key no longer works): %s\n", fs.Arg(0), key)
 	case "list":
 		ts, _ := r.Store().ListTenants(ctx)
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

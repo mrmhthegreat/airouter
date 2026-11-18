@@ -99,6 +99,7 @@ func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	db := dbFlag(fs)
 	addr := fs.String("addr", ":8080", "listen address")
+	cors := fs.String("cors", os.Getenv("AIROUTER_CORS"), "allowed browser origins, comma-separated, or * (default: off)")
 	_ = fs.Parse(args)
 
 	r, err := openRouter(*db)
@@ -116,7 +117,7 @@ func cmdServe(args []string) error {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           server.NewHandler(r, admin),
+		Handler:           server.WithCORS(server.NewHandler(r, admin), *cors),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      4 * time.Minute,
 	}
@@ -128,7 +129,7 @@ func cmdServe(args []string) error {
 		defer cancel()
 		_ = srv.Shutdown(sh)
 	}()
-	fmt.Fprintf(os.Stderr, "airouter listening on %s (db: %s)\n", *addr, *db)
+	fmt.Fprintf(os.Stderr, "airouter listening on %s (db: %s)\n  web UI:        http://localhost%s/\n  OpenAI base:   http://localhost%s/v1\n", *addr, *db, *addr, *addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

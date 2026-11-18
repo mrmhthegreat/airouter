@@ -39,8 +39,12 @@ type providerState struct {
 	deadReason    string
 	inflight      int
 	avgTokens     int
-	bad400        int
-	loaded        bool // pause state read from the store
+	bad400        int       // consecutive config-looking 400s (reset on success)
+	failStreak    int       // consecutive transient failures (drives backoff)
+	upstream      *RateInfo // last rate-limit headers the provider sent
+	learnedRPD    int       // daily request limit the provider itself reported
+	learnedTPM    int       // per-minute token limit the provider itself reported
+	loaded        bool      // pause state read from the store
 }
 
 // locFor returns the time.Location for a zone name, or UTC if unknown.
@@ -106,7 +110,7 @@ func (r *Router) acquire(ctx context.Context, p types.ProviderConfig, st *provid
 	if now.Before(st.deadUntil) {
 		return false, st.deadUntil.Sub(now), true, st.deadReason
 	}
-	if p.RPD > 0 && st.requestsToday >= p.RPD {
+	if rpd := st.effRPD(p); rpd > 0 && st.requestsToday >= rpd {
 		return false, untilReset(p, now), true, "daily request limit reached"
 	}
 	if now.Before(st.coolUntil) {
@@ -128,7 +132,17 @@ func (r *Router) acquire(ctx context.Context, p types.ProviderConfig, st *provid
 		return false, st.hits[0].at.Add(time.Minute).Sub(now), false, "per-minute request limit"
 	}
 	// TPM check: rolling 60-second window of token count (only if TPM is set).
-	if p.TPM > 0 && len(st.hits) > 0 {
+	// Provider-reported remaining tokens (fresh until its own reset time) beat our estimate.
+	if u := st.upstream; u != nil && u.RemainingTokens >= 0 && u.ResetTokens > 0 {
+		est := st.avgTokens
+		if est == 0 {
+			est = defaultTokenGuess
+		}
+		if clear := u.At.Add(u.ResetTokens); now.Before(clear) && u.RemainingTokens < est+st.inflight*est {
+			return false, clear.Sub(now) + 200*time.Millisecond, false, "provider reports no tokens left this minute"
+		}
+	}
+	if tpm := st.effTPM(p); tpm > 0 && len(st.hits) > 0 {
 		est := st.avgTokens
 		if est == 0 {
 			est = defaultTokenGuess
@@ -137,7 +151,7 @@ func (r *Router) acquire(ctx context.Context, p types.ProviderConfig, st *provid
 		for _, h := range st.hits {
 			sum += h.tokens
 		}
-		if sum+est > p.TPM*9/10 {
+		if sum+est > tpm*9/10 {
 			return false, st.hits[0].at.Add(time.Minute).Sub(now), false, "per-minute token limit"
 		}
 	}
@@ -212,19 +226,26 @@ func (st *providerState) release(tokens int) {
 // releaseAudio books the real audio seconds used by a TTS or STT request.
 // Called by Speak and Transcribe after the response is in. Pass secs=0 to
 // skip (e.g. on error).
-func (st *providerState) releaseAudio(secs int) {
+func (st *providerState) releaseAudio(secs int, at time.Time) {
 	if secs <= 0 {
 		return
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.audioSecToday += secs
-	st.audioHits = append(st.audioHits, audioHit{at: time.Now(), secs: secs})
+	st.audioHits = append(st.audioHits, audioHit{at: at, secs: secs})
 	if st.avgAudioSecs == 0 {
 		st.avgAudioSecs = secs
 	} else {
 		st.avgAudioSecs = (st.avgAudioSecs*7 + secs*3) / 10
 	}
+}
+
+// markSuccess clears failure streaks after a good response.
+func (st *providerState) markSuccess() {
+	st.mu.Lock()
+	st.failStreak, st.bad400 = 0, 0
+	st.mu.Unlock()
 }
 
 // ResolveKey is exposed as a convenience for callers who have a types.ProviderConfig

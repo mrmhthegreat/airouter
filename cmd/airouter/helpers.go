@@ -1,7 +1,8 @@
 package main
 
 import (
-	"database/sql"
+	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/mrmhthegreat/airouter/pkg/router"
-	"github.com/mrmhthegreat/airouter/pkg/store"
+	"github.com/mrmhthegreat/airouter/pkg/sqlopen"
 )
 
 // dbFlag registers the standard -db flag. Default is $AIROUTER_DB or ./airouter.db.
@@ -21,21 +22,29 @@ func dbFlag(fs *flag.FlagSet) *string {
 	return fs.String("db", def, "SQLite database file")
 }
 
-// openRouter opens the SQLite store and constructs a Router wired up with a
-// stderr logger. Used by every CLI subcommand.
+// openRouter opens the SQLite store (provider keys encrypted at rest) and
+// constructs a Router wired up with a stderr logger. Used by every subcommand.
 func openRouter(path string) (*router.Router, error) {
-	db, err := sql.Open(sqlDriver, dsn(path))
+	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[airouter] "+f+"\n", a...) }
+	st, _, err := sqlopen.Store(path, logf)
 	if err != nil {
 		return nil, err
 	}
-	st, err := store.NewSQLStore(db)
-	if err != nil {
-		return nil, err
+	return router.New(router.Options{Store: st, Logf: logf})
+}
+
+// readSecret reads a secret without echoing it into shell history: from the
+// -key flag value if given, else one line from stdin.
+func readSecret(flagVal, what string) (string, error) {
+	if flagVal != "" {
+		return flagVal, nil
 	}
-	return router.New(router.Options{
-		Store: st,
-		Logf:  func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[airouter] "+f+"\n", a...) },
-	})
+	fmt.Fprintf(os.Stderr, "%s (input is not hidden; paste and press Enter): ", what)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", errors.New("no key given")
+	}
+	return strings.TrimSpace(line), nil
 }
 
 // readPromptFromStdinOrArgs returns the prompt from joined args, or from stdin

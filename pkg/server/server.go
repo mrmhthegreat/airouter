@@ -75,6 +75,17 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 	mux.HandleFunc("POST /v1/speak", srv.speak)
 	mux.HandleFunc("POST /v1/transcribe", srv.transcribe)
 	mux.HandleFunc("GET /v1/usage", srv.usage)
+	mux.HandleFunc("GET /v1/whoami", srv.whoami)
+
+	// OpenAI-compatible surface: point any OpenAI SDK / editor plugin at
+	// http://HOST/v1 with an airouter key and it just works.
+	mux.HandleFunc("POST /v1/chat/completions", srv.chatCompletions)
+	mux.HandleFunc("GET /v1/models", srv.models)
+	mux.HandleFunc("POST /v1/audio/speech", srv.audioSpeech)
+	mux.HandleFunc("POST /v1/audio/transcriptions", srv.transcribe)
+
+	// Built-in web UI (chat, usage, API help, admin).
+	mux.Handle("GET /{$}", uiHandler())
 
 	mux.HandleFunc("GET /v1/providers", srv.adminOnly(srv.listProviders))
 	mux.HandleFunc("POST /v1/providers", srv.adminOnly(srv.saveProvider))
@@ -84,6 +95,7 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 
 	mux.HandleFunc("GET /v1/tenants", srv.adminOnly(srv.listTenants))
 	mux.HandleFunc("POST /v1/tenants", srv.adminOnly(srv.createTenant))
+	mux.HandleFunc("POST /v1/tenants/{id}/rotate-key", srv.adminOnly(srv.rotateTenantKey))
 
 	return mux
 }
@@ -164,7 +176,7 @@ func (s *apiServer) resolveTenant(w http.ResponseWriter, r *http.Request) (*type
 	}
 	t, err := s.r.Authenticate(r.Context(), key)
 	if err != nil {
-		writeErr(w, 401, err.Error(), nil)
+		writeRouterErr(w, err)
 		return nil, false
 	}
 	return t, true
@@ -184,23 +196,7 @@ func (s *apiServer) generate(w http.ResponseWriter, r *http.Request) {
 	req.TenantID = t.ID // callers can't spoof another tenant
 	resp, err := s.r.Generate(r.Context(), req)
 	if err != nil {
-		var ex *types.ExhaustedError
-		var af *types.AllFailedError
-		var tl *types.TenantLimitError
-		switch {
-		case errors.As(err, &ex):
-			writeErr(w, 503, err.Error(), map[string]any{"retry_after_seconds": int64(ex.RetryAfter.Seconds()) + 1, "reasons": ex.Reasons})
-		case errors.As(err, &tl):
-			writeErr(w, 429, err.Error(), map[string]any{"retry_after_seconds": int64(tl.RetryAfter.Seconds()) + 1})
-		case errors.As(err, &af):
-			writeErr(w, 502, err.Error(), map[string]any{"attempts": af.Attempts})
-		case errors.Is(err, types.ErrNoProviders):
-			writeErr(w, 503, err.Error(), nil)
-		case strings.Contains(err.Error(), "prompt or at least one user message"):
-			writeErr(w, 400, err.Error(), nil)
-		default:
-			writeErr(w, 500, err.Error(), nil)
-		}
+		writeRouterErr(w, err)
 		return
 	}
 	w.Header().Set("X-AIRouter-Provider", resp.Provider)
@@ -321,27 +317,8 @@ func (s *apiServer) transcribe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, resp)
 }
 
-// writeSpeakTranscribeError maps router errors to HTTP statuses. Same shape as
-// the generate handler's error mapping.
-func writeSpeakTranscribeError(w http.ResponseWriter, err error) {
-	var ex *types.ExhaustedError
-	var af *types.AllFailedError
-	var tl *types.TenantLimitError
-	switch {
-	case errors.As(err, &ex):
-		writeErr(w, 503, err.Error(), map[string]any{"retry_after_seconds": int64(ex.RetryAfter.Seconds()) + 1, "reasons": ex.Reasons})
-	case errors.As(err, &tl):
-		writeErr(w, 429, err.Error(), map[string]any{"retry_after_seconds": int64(tl.RetryAfter.Seconds()) + 1})
-	case errors.As(err, &af):
-		writeErr(w, 502, err.Error(), map[string]any{"attempts": af.Attempts})
-	case strings.Contains(err.Error(), "no TTS providers"), strings.Contains(err.Error(), "no STT providers"):
-		writeErr(w, 503, err.Error(), nil)
-	case strings.Contains(err.Error(), "is required"):
-		writeErr(w, 400, err.Error(), nil)
-	default:
-		writeErr(w, 500, err.Error(), nil)
-	}
-}
+// writeSpeakTranscribeError is kept for the speak/transcribe handlers.
+func writeSpeakTranscribeError(w http.ResponseWriter, err error) { writeRouterErr(w, err) }
 
 // base64StdEncoding returns the standard base64 encoding of b. Used to embed
 // audio bytes in the JSON envelope response when the caller asks for ?format=json.
@@ -396,7 +373,8 @@ func (s *apiServer) bootstrap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	added, skipped, err := s.r.BootstrapProviders(r.Context(), overwrite, onlyPreset, categories)
+	storeKeys := r.URL.Query().Get("store_keys") == "1" || r.URL.Query().Get("store_keys") == "true"
+	added, skipped, err := s.r.BootstrapProvidersOpts(r.Context(), router.BootstrapOptions{Overwrite: overwrite, Preset: onlyPreset, Categories: categories, StoreKeys: storeKeys})
 	if err != nil {
 		writeErr(w, 500, err.Error(), nil)
 		return
@@ -460,6 +438,23 @@ func (s *apiServer) toggleProvider(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{"id": id, "disabled": action == "disable"})
+	case "key":
+		var body struct {
+			APIKey string `json:"api_key"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			writeErr(w, 400, "invalid JSON body: "+err.Error(), nil)
+			return
+		}
+		if err := s.r.SetProviderKey(r.Context(), id, body.APIKey); err != nil {
+			code := 400
+			if errors.Is(err, types.ErrNotFound) {
+				code = 404
+			}
+			writeErr(w, code, err.Error(), nil)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"id": id, "key_stored": true})
 	case "reset":
 		if err := s.r.ClearPause(r.Context(), id); err != nil {
 			writeErr(w, 500, err.Error(), nil)
@@ -467,7 +462,7 @@ func (s *apiServer) toggleProvider(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]any{"id": id, "paused": false})
 	default:
-		writeErr(w, 400, "use /v1/providers/{id}/enable, /disable, or /reset", nil)
+		writeErr(w, 400, "use /v1/providers/{id}/enable, /disable, /reset, or /key", nil)
 	}
 }
 
@@ -496,4 +491,30 @@ func (s *apiServer) createTenant(w http.ResponseWriter, r *http.Request) {
 		"api_key": key,
 		"note":    "store this key now — it is not shown again",
 	})
+}
+
+func (s *apiServer) rotateTenantKey(w http.ResponseWriter, r *http.Request) {
+	key, err := s.r.RotateTenantKey(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeRouterErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"tenant":  r.PathValue("id"),
+		"api_key": key,
+		"note":    "the old key no longer works; store this one now — it is not shown again",
+	})
+}
+
+// whoami tells a client (and the web UI) what its credential is.
+func (s *apiServer) whoami(w http.ResponseWriter, r *http.Request) {
+	role := "tenant"
+	if s.isAdmin(r) {
+		role = "admin"
+	}
+	t, ok := s.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"role": role, "tenant": t})
 }

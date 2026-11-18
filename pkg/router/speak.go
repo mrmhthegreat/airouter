@@ -32,7 +32,7 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 		req.TenantID = types.DefaultTenantID
 	}
 	if strings.TrimSpace(req.Text) == "" {
-		return nil, errors.New("airouter: SpeakRequest.Text is required")
+		return nil, fmt.Errorf("%w: SpeakRequest.Text is required", types.ErrBadRequest)
 	}
 	tenant, err := r.store.TenantByID(ctx, req.TenantID)
 	if err != nil {
@@ -76,7 +76,7 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 			if failed[c.cfg.ID] {
 				continue
 			}
-			if c.cfg.Kind != "ollama" && c.cfg.ResolveKey() == "" {
+			if !c.cfg.HasKey() {
 				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + ")"
 				continue
 			}
@@ -113,7 +113,7 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 		// us under the ASH/ASD caps with the 90% safety margin in acquire.
 		audioSecs := estimateTTSAudioSeconds(req.Text)
 		if err == nil && audioSecs > 0 {
-			picked.state.releaseAudio(audioSecs)
+			picked.state.releaseAudio(audioSecs, r.now())
 		}
 		errs := 0
 		if err != nil {

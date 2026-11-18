@@ -21,15 +21,16 @@ Supports text chat, text-to-speech (TTS) and speech-to-text (STT).
   airouter speak [flags] TEXT          text → audio (WAV bytes; use -o to save to a file)
   airouter transcribe [flags] FILE     audio file → text
   airouter serve [-addr :8080]         run the HTTP API
-  airouter provider add|list|rm|enable|disable|reset|import
-  airouter tenant add|list
-  airouter bootstrap [-preset NAME] [-category text|tts|stt|all]
+  airouter provider add|list|rm|enable|disable|reset|set-key|import
+  airouter tenant add|list|rotate
+  airouter bootstrap [-preset NAME] [-category text|tts|stt|all] [-store-keys]
                                        seed the DB from the curated free-pool catalog
   airouter usage [-tenant ID] [-day YYYY-MM-DD]
   airouter presets                     list built-in provider presets
   airouter free-pool [-category X]     list the curated free-tier model catalog
 
-Database: -db FILE or $AIROUTER_DB (default ./airouter.db).
+Database: -db FILE or $AIROUTER_DB (default ./airouter.db). Provider keys are stored
+          encrypted; the secret is $AIROUTER_SECRET or <db>.key (back it up separately).
 Output:   defaults to text when stdout is a pipe, pretty when interactive;
           -json / -envelope / -text override. Run 'airouter <command> -h' for flags.`
 

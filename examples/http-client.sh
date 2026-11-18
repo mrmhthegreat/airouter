@@ -35,3 +35,10 @@ curl -s "$BASE/v1/generate" \
   -H "Content-Type: application/json" \
   -d '{"prompt":"hi","provider":"groq-llama-3.1-8b-instant"}'
 echo
+
+echo "==> OpenAI-compatible endpoint (what any OpenAI SDK sends)"
+curl -s "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"Say hi"}]}'
+echo

@@ -51,6 +51,43 @@ func (r *Router) Authenticate(ctx context.Context, key string) (*types.Tenant, e
 	return t, nil
 }
 
+// RotateTenantKey issues a new API key for a tenant and invalidates the old
+// one immediately. The new key is returned once; only its hash is stored.
+func (r *Router) RotateTenantKey(ctx context.Context, tenantID string) (string, error) {
+	t, err := r.store.TenantByID(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if t == nil {
+		return "", types.ErrUnknownTenant
+	}
+	key, hash := store.NewAPIKey()
+	if err := r.store.UpdateTenantKeyHash(ctx, tenantID, hash); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// SetProviderKey stores (encrypted, when the store was opened with
+// encryption) a new API key for a provider and lifts any pause on it.
+func (r *Router) SetProviderKey(ctx context.Context, id int64, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("api key is empty")
+	}
+	ps, err := r.store.ListProviders(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			p.APIKey = key
+			return r.SaveProvider(ctx, &p)
+		}
+	}
+	return types.ErrNotFound
+}
+
 // SaveProvider validates and stores a provider (applying a preset and the
 // used_today_hint if given). Editing an existing provider lifts any pause on
 // it (a new key or model should be tried immediately).
@@ -135,6 +172,25 @@ func (r *Router) SetDisabled(ctx context.Context, id int64, disabled bool) error
 // import every entry (useful for seeing what's available — most non-text
 // entries will fail at call time because they need different request shapes).
 func (r *Router) BootstrapProviders(ctx context.Context, overwrite bool, onlyPreset string, categories []string) (added, skipped []string, err error) {
+	return r.BootstrapProvidersOpts(ctx, BootstrapOptions{Overwrite: overwrite, Preset: onlyPreset, Categories: categories})
+}
+
+// BootstrapOptions tunes BootstrapProvidersOpts.
+type BootstrapOptions struct {
+	Overwrite  bool
+	Preset     string
+	Categories []string
+	// StoreKeys copies each key found in its env var into the database
+	// (encrypted) so the provider keeps working without that env var set.
+	StoreKeys bool
+	// Keys supplies keys directly, by env var name (e.g. "GROQ_API_KEY"), for
+	// callers that never use environment variables. They are stored encrypted.
+	Keys map[string]string
+}
+
+// BootstrapProvidersOpts is BootstrapProviders with extra options.
+func (r *Router) BootstrapProvidersOpts(ctx context.Context, o BootstrapOptions) (added, skipped []string, err error) {
+	overwrite, onlyPreset, categories := o.Overwrite, o.Preset, o.Categories
 	// Three cases, deliberately distinct so HTTP ?category=all can actually
 	// mean "all" instead of falling into the default-text branch:
 	//   categories == nil          → default = text only (caller said nothing)
@@ -159,11 +215,14 @@ func (r *Router) BootstrapProviders(ctx context.Context, overwrite bool, onlyPre
 			continue
 		}
 		cfg := m.ToProviderConfig()
+		if k := strings.TrimSpace(o.Keys[cfg.APIKeyEnv]); k != "" {
+			cfg.APIKey, cfg.APIKeyEnv = k, ""
+		}
 		// Skip providers that need an env var the user has not set, unless
 		// they're Ollama (no key needed). This keeps bootstrap from seeding
 		// a dozen broken entries on a fresh machine.
-		if cfg.Kind != "ollama" && cfg.APIKeyEnv != "" && cfg.ResolveKey() == "" {
-			skipped = append(skipped, cfg.Name+" (set $"+cfg.APIKeyEnv+")")
+		if !cfg.HasKey() {
+			skipped = append(skipped, cfg.Name+" (no key: set $"+cfg.APIKeyEnv+" or pass it in)")
 			continue
 		}
 		key := cfg.TenantID + "|" + cfg.Name
@@ -172,6 +231,9 @@ func (r *Router) BootstrapProviders(ctx context.Context, overwrite bool, onlyPre
 			continue
 		} else if ok {
 			cfg.ID = prev.ID
+		}
+		if o.StoreKeys && cfg.APIKeyEnv != "" {
+			cfg.APIKey = cfg.ResolveKey()
 		}
 		if err := r.SaveProvider(ctx, &cfg); err != nil {
 			skipped = append(skipped, cfg.Name+" ("+err.Error()+")")

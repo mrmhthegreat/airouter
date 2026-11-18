@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mrmhthegreat/airouter/pkg/preset"
+	"github.com/mrmhthegreat/airouter/pkg/router"
 )
 
 // cmdBootstrap implements `airouter bootstrap [-preset NAME] [-category a,b,c] [-overwrite]`.
@@ -24,6 +25,7 @@ func cmdBootstrap(args []string) error {
 	onlyPreset := fs.String("preset", "", "only import entries for this preset (e.g. groq)")
 	categoryFlag := fs.String("category", "text", "comma-separated categories to import (default: text). Pass 'all' for everything, or e.g. 'text,tts,stt'")
 	overwrite := fs.Bool("overwrite", false, "update existing same-name providers in place")
+	storeKeys := fs.Bool("store-keys", false, "copy keys found in env vars into the database (encrypted) so the env vars are no longer needed")
 	_ = fs.Parse(args)
 
 	var categories []string
@@ -42,7 +44,7 @@ func cmdBootstrap(args []string) error {
 	if err != nil {
 		return err
 	}
-	added, skipped, err := r.BootstrapProviders(context.Background(), *overwrite, *onlyPreset, categories)
+	added, skipped, err := r.BootstrapProvidersOpts(context.Background(), router.BootstrapOptions{Overwrite: *overwrite, Preset: *onlyPreset, Categories: categories, StoreKeys: *storeKeys})
 	if err != nil {
 		return err
 	}

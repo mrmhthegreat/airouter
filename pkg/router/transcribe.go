@@ -28,7 +28,7 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 		req.TenantID = types.DefaultTenantID
 	}
 	if len(req.Audio) == 0 {
-		return nil, errors.New("airouter: TranscribeRequest.Audio is required (raw audio bytes)")
+		return nil, fmt.Errorf("%w: TranscribeRequest.Audio is required (raw audio bytes)", types.ErrBadRequest)
 	}
 	tenant, err := r.store.TenantByID(ctx, req.TenantID)
 	if err != nil {
@@ -70,7 +70,7 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 			if failed[c.cfg.ID] {
 				continue
 			}
-			if c.cfg.Kind != "ollama" && c.cfg.ResolveKey() == "" {
+			if !c.cfg.HasKey() {
 				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + ")"
 				continue
 			}
@@ -108,7 +108,7 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 		// keeps us under the ASH/ASD caps with the 90% safety margin.
 		audioSecs := estimateSTTAudioSeconds(req.Audio, req.Filename, req.MimeType)
 		if err == nil && audioSecs > 0 {
-			picked.state.releaseAudio(audioSecs)
+			picked.state.releaseAudio(audioSecs, r.now())
 		}
 		errs := 0
 		if err != nil {

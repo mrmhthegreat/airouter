@@ -10,28 +10,36 @@ import (
 // ProviderStatus is the live, human-readable state of one provider. Returned
 // by Status; surfaced via `airouter provider list` and `GET /v1/providers`.
 type ProviderStatus struct {
-	ID             int64  `json:"id"`
-	Name           string `json:"name"`
-	TenantID       string `json:"tenant_id,omitempty"`
-	Kind           string `json:"kind"`
-	Model          string `json:"model"`
-	Preset         string `json:"preset,omitempty"`
-	Category       string `json:"category"` // text | tts | stt
-	Priority       int    `json:"priority"`
-	State          string `json:"state"` // ok | disabled | no api key | cooling down | daily limit reached | paused: <reason>
-	UsedToday      int    `json:"used_today"`
-	TokensToday    int    `json:"tokens_today"`
-	AudioSecToday  int    `json:"audio_seconds_today"` // ASD usage (TTS/STT only)
-	RPD            int    `json:"rpd"`
-	RPM            int    `json:"rpm"`
-	TPM            int    `json:"tpm"`
-	ASH            int    `json:"ash"` // audio seconds per hour cap (0 = no cap)
-	ASD            int    `json:"asd"` // audio seconds per day cap (0 = no cap)
-	LastMinute     int    `json:"requests_last_minute"`
-	ResetTZ        string `json:"reset_tz"`
-	ResetsInSec    int64  `json:"resets_in_seconds"`
-	HasKey         bool   `json:"has_key"`
-	RemainingToday *int   `json:"remaining_today,omitempty"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	Kind          string `json:"kind"`
+	Model         string `json:"model"`
+	Preset        string `json:"preset,omitempty"`
+	Category      string `json:"category"` // text | tts | stt
+	Priority      int    `json:"priority"`
+	State         string `json:"state"` // ok | disabled | no api key | cooling down | daily limit reached | paused: <reason>
+	UsedToday     int    `json:"used_today"`
+	TokensToday   int    `json:"tokens_today"`
+	AudioSecToday int    `json:"audio_seconds_today"` // ASD usage (TTS/STT only)
+	RPD           int    `json:"rpd"`
+	RPM           int    `json:"rpm"`
+	TPM           int    `json:"tpm"`
+	ASH           int    `json:"ash"` // audio seconds per hour cap (0 = no cap)
+	ASD           int    `json:"asd"` // audio seconds per day cap (0 = no cap)
+	LastMinute    int    `json:"requests_last_minute"`
+	ResetTZ       string `json:"reset_tz"`
+	ResetsInSec   int64  `json:"resets_in_seconds"`
+	HasKey        bool   `json:"has_key"`
+	// LimitsSource is "reported" when RPD/TPM come from the provider's own
+	// response headers, "config" when they come from the catalog / your settings.
+	LimitsSource string `json:"limits_source"`
+	KeySource    string `json:"key_source"`         // env | db | none | not needed
+	KeyHint      string `json:"key_hint,omitempty"` // masked "…a1b2"
+	// Upstream is what the provider itself last reported about its limits
+	// (rate-limit response headers), when it sends them.
+	Upstream       *RateInfo `json:"upstream,omitempty"`
+	RemainingToday *int      `json:"remaining_today,omitempty"`
 }
 
 // Status returns the live status of every provider. Pass a tenantID to see only
@@ -52,14 +60,18 @@ func (r *Router) Status(ctx context.Context, tenantID string) []ProviderStatus {
 			UsedToday:     st.requestsToday,
 			TokensToday:   st.tokensToday,
 			AudioSecToday: st.audioSecToday,
-			RPD:           cfg.RPD,
+			RPD:           st.effRPD(cfg),
+			LimitsSource:  limitsSource(st),
 			RPM:           cfg.RPM,
-			TPM:           cfg.TPM,
+			TPM:           st.effTPM(cfg),
 			ASH:           cfg.ASH,
 			ASD:           cfg.ASD,
 			ResetTZ:       cfg.ResetTZ,
 			ResetsInSec:   int64(untilReset(cfg, now).Seconds()),
-			HasKey:        cfg.Kind == "ollama" || cfg.ResolveKey() != "",
+			HasKey:        cfg.HasKey(),
+			KeySource:     cfg.KeySource(),
+			KeyHint:       cfg.KeyHint(),
+			Upstream:      st.upstream,
 			State:         "ok",
 		}
 		if s.Category == "" {
@@ -70,8 +82,8 @@ func (r *Router) Status(ctx context.Context, tenantID string) []ProviderStatus {
 				s.LastMinute++
 			}
 		}
-		if cfg.RPD > 0 {
-			rem := maxInt(0, cfg.RPD-st.requestsToday)
+		if rpd := st.effRPD(cfg); rpd > 0 {
+			rem := maxInt(0, rpd-st.requestsToday)
 			s.RemainingToday = &rem
 		}
 		switch {
@@ -81,7 +93,7 @@ func (r *Router) Status(ctx context.Context, tenantID string) []ProviderStatus {
 			s.State = "no api key"
 		case now.Before(st.deadUntil):
 			s.State = "paused: " + st.deadReason
-		case cfg.RPD > 0 && st.requestsToday >= cfg.RPD:
+		case st.effRPD(cfg) > 0 && st.requestsToday >= st.effRPD(cfg):
 			s.State = "daily request limit reached"
 		case cfg.ASD > 0 && st.audioSecToday >= cfg.ASD:
 			s.State = "daily audio seconds limit reached"
@@ -146,9 +158,16 @@ func (r *Router) Usage(ctx context.Context, tenantID, day string) (*UsageReport,
 		rep.Providers = append(rep.Providers, UsageRow{
 			Provider: c.cfg.Name, Model: c.cfg.Model, Day: d,
 			TenantRequests: tr, TenantTokens: tt, TenantErrors: te,
-			AllRequests: ar, LimitPerDay: c.cfg.RPD,
+			AllRequests: ar, LimitPerDay: c.state.effRPD(c.cfg),
 			ResetsInSec: int64(untilReset(c.cfg, now).Seconds()),
 		})
 	}
 	return rep, nil
+}
+
+func limitsSource(st *providerState) string {
+	if st.learnedRPD > 0 || st.learnedTPM > 0 {
+		return "reported"
+	}
+	return "config"
 }

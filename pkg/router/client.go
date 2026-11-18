@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/mrmhthegreat/airouter/pkg/types"
 )
@@ -34,7 +32,7 @@ func buildMessages(req types.Request) ([]types.Message, error) {
 		}
 	}
 	if !hasUser {
-		return nil, fmt.Errorf("airouter: a prompt or at least one user message is required")
+		return nil, fmt.Errorf("%w: a prompt or at least one user message is required", types.ErrBadRequest)
 	}
 	return msgs, nil
 }
@@ -66,7 +64,7 @@ func foldSystem(msgs []types.Message) []types.Message {
 // callProvider sends one request to one provider and returns (text, totalTokens, error).
 // It builds the right body shape for OpenAI-compatible vs Ollama, applies
 // JSON-mode and system-role quirks, and turns non-2xx responses into HTTPError.
-func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs []types.Message, req types.Request) (string, int, error) {
+func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs []types.Message, req types.Request) (string, int, http.Header, error) {
 	// Gemma-style provider: no response_format, so ask for JSON in words.
 	if req.JSON && p.Kind != "ollama" && !p.UseJSONMode() {
 		msgs = append([]types.Message(nil), msgs...)
@@ -111,11 +109,11 @@ func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs 
 	}
 
 	raw, _ := json.Marshal(body)
-	callCtx, cancel := context.WithTimeout(ctx, 150*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, r.attemptTimeout)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if k := p.ResolveKey(); k != "" {
@@ -124,13 +122,13 @@ func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs 
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode/100 != 2 {
-		ra, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-		return "", 0, &types.HTTPError{Code: resp.StatusCode, Body: string(data), RetryAfter: time.Duration(ra) * time.Second}
+		return "", 0, resp.Header, &types.HTTPError{Code: resp.StatusCode, Body: string(data),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), r.now()), Header: resp.Header}
 	}
 
 	if p.Kind == "ollama" {
@@ -142,9 +140,9 @@ func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs 
 			Eval       int `json:"eval_count"`
 		}
 		if err := json.Unmarshal(data, &d); err != nil {
-			return "", 0, fmt.Errorf("bad ollama response: %w", err)
+			return "", 0, resp.Header, errBadResponse("bad ollama response: " + err.Error())
 		}
-		return d.Message.Content, d.PromptEval + d.Eval, nil
+		return d.Message.Content, d.PromptEval + d.Eval, resp.Header, nil
 	}
 
 	var d struct {
@@ -158,9 +156,9 @@ func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs 
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil || len(d.Choices) == 0 {
-		return "", 0, fmt.Errorf("bad response: %s", types.Truncate(string(data), 160))
+		return "", 0, resp.Header, errBadResponse("bad response: " + types.Truncate(string(data), 160))
 	}
-	return d.Choices[0].Message.Content, d.Usage.Total, nil
+	return d.Choices[0].Message.Content, d.Usage.Total, resp.Header, nil
 }
 
 // extractJSON pulls a valid JSON value out of model output: handles ``` fences

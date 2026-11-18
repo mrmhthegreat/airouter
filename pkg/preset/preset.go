@@ -254,7 +254,7 @@ var FreePool = []FreeModel{
 
 	// Gemma via Gemini API — no JSON mode, no system role. airouter folds system
 	// into the user turn and asks for JSON in words.
-	{Preset: "gemma", Model: "gemma-4-26b-a4b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 65, Workers: 2,
+	{Preset: "gemma", Model: "gemma-4-31b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 65, Workers: 2,
 		Notes:      "Gemma 4 31B via Gemini API. No system role, no response_format — airouter handles both.",
 		VerifiedOn: "2026-11-17"},
 	{Preset: "gemma", Model: "gemma-4-26b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 70, Workers: 2,

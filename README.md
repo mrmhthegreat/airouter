@@ -283,104 +283,206 @@ Default voices when the caller does not pass `-voice`:
 - Gemini TTS: https://aistudio.google.com/docs/speech-generation
 - Gemini STT: https://aistudio.google.com/docs/transcribe
 
-## HTTP server
+## HTTP server, web UI and OpenAI-compatible API
 
 ```bash
 export AIROUTER_ADMIN_TOKEN=change-me
-./bin/airouter tenant add acme -limit 2000 -tz Asia/Karachi    # prints the tenant API key once
-./bin/airouter serve -addr :8080
+export AIROUTER_SECRET=$(openssl rand -hex 32)      # encrypts provider keys in the DB (keep it safe)
+./bin/airouter tenant add acme -limit 2000          # prints the tenant API key once
+./bin/airouter serve -addr :8080                    # add -cors https://myapp.com for browser apps
 ```
+
+- **Web UI:** open `http://localhost:8080/`, paste a tenant key (or the admin
+  token). Tabs: **Chat** (shows which provider answered and any failovers),
+  **Usage** (live provider status, daily usage, what the provider itself
+  reports as remaining), **Connect your app** (base URL + copy-paste
+  curl/Python/JS snippets), **Admin** (retry/disable providers, set provider
+  keys, create tenants, rotate keys).
+- **OpenAI-compatible:** base URL `http://localhost:8080/v1`, API key = your
+  airouter tenant key, `model: "auto"`.
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="air_...")
+print(client.chat.completions.create(model="auto",
+      messages=[{"role": "user", "content": "Hello"}]).choices[0].message.content)
+```
+
+Supported: `POST /v1/chat/completions` (incl. `stream: true`, `response_format`
+json, `max_tokens`, `temperature`), `GET /v1/models`, `POST /v1/audio/speech`,
+`POST /v1/audio/transcriptions`. `model` is `auto` (router chooses and fails
+over) or a provider name / exact model id to pin one. **Not supported yet:**
+tool/function calling and image input (clear `400`). `stream: true` is
+*buffered streaming*: the router needs the whole answer to fail over safely, so
+chunks are sent after it completes.
+
+Native API (richer: attempts, provider, latency):
 
 ```bash
-# Generate (JSON in, JSON out by default; text with ?format=text)
-curl -s localhost:8080/v1/generate -H "Authorization: Bearer air_..." \
-  -d '{"prompt":"Say hi","system":"Be brief","json":false}'
-
-# Plain text out
-curl -s "localhost:8080/v1/generate?format=text" -H "Authorization: Bearer air_..." -d '{"prompt":"Say hi"}'
-
-# Usage + live provider status
-curl -s localhost:8080/v1/usage -H "Authorization: Bearer air_..."
-
-# Bootstrap the DB over HTTP (admin token)
-curl -s -X POST localhost:8080/v1/bootstrap -H "Authorization: Bearer change-me"
+curl -s localhost:8080/v1/generate -H "Authorization: Bearer air_..." -d '{"prompt":"Say hi","system":"Be brief"}'
+curl -s localhost:8080/v1/usage    -H "Authorization: Bearer air_..."      # usage + live provider status
+curl -s localhost:8080/v1/whoami   -H "Authorization: Bearer air_..."
 ```
 
-Request body fields: `prompt` or `messages`, `system`, `json`, `max_tokens`,
-`temperature`, `provider` (pin one by name), `strategy` (`priority` | `spread`).
+### Status codes you will see
 
-Error codes: `401` bad key, `429` tenant cap (with `retry_after_seconds`),
-`503` all providers limited (with per-provider `reasons` + `retry_after_seconds`),
-`502` every provider failed (with `attempts`), `400` bad request body.
+| Code | Meaning | Retry? |
+|------|---------|--------|
+| 400 | Your request is invalid (empty messages, every provider rejected it as bad) | No, fix it |
+| 401 | Missing/invalid key | No |
+| 403 | Tenant disabled | No |
+| 429 | **Your tenant's** daily cap is used up (`Retry-After`) | After reset |
+| 502 | Providers were tried and all failed (`attempts` lists why) | Yes, soon |
+| 503 | Every provider is limited / cooling down right now (`Retry-After`, `reasons`) | Yes, after `Retry-After` |
+| 504 | The whole request timed out (default 2 min) | Yes |
+
+OpenAI SDKs retry 429/503 automatically, so they behave well against airouter.
 
 Admin endpoints (`Authorization: Bearer <admin token>`):
 `GET/POST /v1/providers`, `DELETE /v1/providers/{id}`,
 `POST /v1/providers/{id}/enable|disable|reset`,
-`GET/POST /v1/tenants`, `POST /v1/bootstrap`.
+`POST /v1/providers/{id}/key` (`{"api_key": "..."}`),
+`GET/POST /v1/tenants`, `POST /v1/tenants/{id}/rotate-key`,
+`POST /v1/bootstrap?store_keys=1`.
 
-Public endpoints: `GET /healthz`, `GET /v1/presets`, `GET /v1/presets/free-pool`.
+Public endpoints: `GET /` (UI), `GET /healthz`, `GET /v1/presets`, `GET /v1/presets/free-pool`.
 
-## As a Go package
+## Keys and secrets: what is stored how
 
-```go
-import (
-    "database/sql"
-    _ "github.com/mattn/go-sqlite3"
+| Secret | Storage | Why |
+|--------|---------|-----|
+| Tenant API keys (`air_...`) | **SHA-256 hash only** in the DB | Shown once; a DB leak reveals no working key. Rotate with `airouter tenant rotate NAME`. |
+| Provider keys (Groq, Gemini, ...) | **AES-256-GCM encrypted** in the DB | They must be sent upstream, so they cannot be hashed. The DB alone is useless without the master secret. |
+| Master secret | `$AIROUTER_SECRET`, else a `0600` file `<db>.key` | Back it up **separately** from the DB. Lose it and stored provider keys cannot be decrypted (re-enter them). |
 
-    "github.com/mrmhthegreat/airouter/pkg/router"
-    "github.com/mrmhthegreat/airouter/pkg/server"
-    "github.com/mrmhthegreat/airouter/pkg/store"
-    "github.com/mrmhthegreat/airouter/pkg/types"
-)
+No JSON key files are needed any more:
 
-db, _ := sql.Open("sqlite3", "file:airouter.db?_busy_timeout=5000&_journal_mode=WAL")
-st, _ := store.NewSQLStore(db)              // or store.NewMemoryStore()
-r, _  := router.New(router.Options{Store: st})
-
-// Seed from the free-pool catalog (skips providers whose env var is unset)
-added, skipped, _ := r.BootstrapProviders(ctx, false, "")
-
-resp, err := r.Generate(ctx, types.Request{Prompt: "hello", JSON: false})
-// resp.Text, resp.JSON, resp.Provider, resp.Model, resp.Tokens, resp.Attempts
-
-http.ListenAndServe(":8080", server.NewHandler(r, adminToken))
+```bash
+airouter provider add -preset groq -model openai/gpt-oss-120b -key-stdin   # paste key; stored encrypted
+airouter provider set-key 3                                                 # replace a key later
+airouter bootstrap -store-keys        # copy keys from env vars into the DB, then unset the env vars
 ```
 
-See [`examples/embedded.go`](examples/embedded.go) for a complete runnable
-example, and [`examples/http-client.sh`](examples/http-client.sh) for the
-curl version.
+`provider list` shows where each key comes from (`db` / `env`) without ever
+printing it. Databases from older versions with plaintext keys are encrypted
+automatically on first open.
+
+## Do providers tell us their limits through the API?
+
+Partly, and airouter uses whatever they send:
+
+- **Groq** sends `x-ratelimit-limit/remaining/reset-requests` (per day) and
+  `-tokens` (per minute) on every response, and `retry-after` on 429s.
+  airouter reads them: when `remaining` hits 0 it pauses that provider
+  *before* the next request earns a 429, and shows "provider reports N left"
+  in Usage. ([Groq docs](https://console.groq.com/docs/rate-limits))
+- **Gemini** (OpenAI-compatible endpoint) sends no rate-limit headers. Its 429
+  body contains a `retryDelay` (e.g. `"34s"`) and a quota name containing
+  `PerDay`; airouter uses both. Free-tier numbers still come from the catalog
+  (`rpm`/`rpd`), so keep them correct.
+- **Others** (Cerebras, Mistral, OpenRouter, ...) use the same
+  `x-ratelimit-*` header family or `Retry-After`; airouter parses these
+  best-effort. Header formats differ per provider and change over time, so
+  treat provider-reported numbers as a bonus, not the source of truth.
+
+What airouter does with the numbers (so the system adapts instead of trusting
+a static catalog):
+
+- **Limits are learned.** The provider's reported daily request limit and token
+  limit replace the configured `rpd`/`tpm` (Usage shows "limit from provider").
+  A different tier or a changed free tier needs no config edit.
+- **The daily counter is corrected from the provider.** If another app or
+  process uses the same key, airouter's count jumps to the real remaining value
+  and the correction is saved in the DB.
+- **"0 left" pauses until the provider's own reset time,** not a guess.
+- **Tokens left this minute** are checked before each call; the provider is
+  skipped until its reported token reset.
+- **Gemini** has none of this, so airouter reads the structured 429 body:
+  a `...PerDay...` quota id parks it until Pacific midnight (daylight saving
+  handled), a `...PerMinute...` one waits the given `retryDelay`.
+- Groq's plain `x-ratelimit-*-requests` headers are treated as per-day (hosts in
+  `router.DailyRequestHostHints`); other hosts' plain names as per-minute, and
+  explicit `-day` / `-minute` header names are always trusted.
+
+Nobody exposes a universal "what are my limits" endpoint for free keys, so
+the configured `rpm/rpd/tpm` values remain the starting point until a provider
+reports its own.
+
+## As a Go package (in your own projects)
+
+```bash
+go get github.com/mrmhthegreat/airouter@latest
+# not published yet? in your project's go.mod:
+#   require github.com/mrmhthegreat/airouter v0.0.0
+#   replace github.com/mrmhthegreat/airouter => ../airouter
+```
+
+```go
+import "github.com/mrmhthegreat/airouter"
+
+c, err := airouter.Open(airouter.Options{DB: "ai.db"})   // keys encrypted at rest
+if err != nil { log.Fatal(err) }
+defer c.Close()
+
+// once: put your keys in the DB (encrypted). Afterwards no env vars are needed.
+c.AddFreePool(ctx, map[string]string{"GROQ_API_KEY": "gsk_...", "GEMINI_API_KEY": "..."})
+
+text, err := c.Chat(ctx, "Write one sentence about rain")   // auto-failover
+
+// full control
+resp, err := c.Ask(ctx, types.Request{System: "Be brief", Prompt: "hi", JSON: true})
+
+// expose OpenAI API + web UI from your own server
+http.ListenAndServe(":8080", c.Handler(os.Getenv("AIROUTER_ADMIN_TOKEN")))
+```
+
+`airouter.NewClient(store)` takes any `store.Store` (memory, or your own
+Postgres) if you do not want SQLite. All `router.Router` methods
+(`Generate`, `Speak`, `Transcribe`, `Status`, `Usage`, ...) are on the client.
+Share the same DB file with the CLI and server: usage and pauses are shared.
+See [`examples/embedded.go`](examples/embedded.go).
 
 ## How switching works
 
 Providers are tried by `priority` (lower first; a tenant's own providers go
-before shared ones). A provider is skipped when:
+before shared ones). A provider is skipped when its daily cap is reached
+(paused to its local midnight), its per-minute window is full (90% safety
+margin), it is busy (`workers`), or it is paused/cooling down.
 
-- its daily request cap is reached → paused until the provider's local midnight
-- its per-minute request/token window is full at the 90% safety margin → wait
-  for the oldest hit to age out of the 60s window
-- it is busy (concurrent requests ≥ `workers`) → 250ms retry
-- it is paused (long cooldown) → skip until the deadline
+What happens when a provider fails:
 
-A `429` whose body mentions "per day" / "daily" pauses the provider until its
-local midnight. Other `429`s cool it for 30s or the upstream `Retry-After`.
-`401/403/404` pause 24h (bad key or model id). Repeated `400` (3 in a row)
-pauses 24h. If everything is only briefly limited, `Generate` waits up to
-`MaxWait` (20s); otherwise it returns `ExhaustedError` with the retry time.
+| Upstream result | Reaction |
+|-----------------|----------|
+| 401, 403, 404 | Pause 24h (bad key / model id), then try the next provider |
+| 402 | Pause 1h (out of credits) |
+| 429 with daily hint (`PerDay`, "daily", Retry-After > 5 min, or headers say 0 left for hours) | Pause until the provider's local midnight |
+| other 429 | Cool down for `Retry-After` / Gemini `retryDelay` (30s if none) |
+| 400, 413, 422 | **No penalty** (it is usually your request). If every provider rejects it you get a 400. 3 config-looking 400s in a row (bad model / json mode) pause 24h; any success resets this |
+| 408, 5xx, timeout, network error | Exponential backoff 20s, 40s, ... up to 5 min; reset on success |
+| 200 but empty / invalid JSON when JSON was requested | Try the next provider, no penalty |
+
+**When limits are hit it does not hammer or loop forever:** each provider is
+tried at most once per request. If everything is only briefly limited,
+`Generate` waits up to `MaxWait` (20s) for the soonest provider; otherwise it
+returns `503` with `Retry-After`. A single call is bounded by
+`AttemptTimeout` (60s) and the whole request by `RequestTimeout` (2 min).
 
 ## Project layout
 
 ```
+airouter.go           one-import facade for your own projects (airouter.Open)
 cmd/airouter/         CLI entry point and per-command files (ask.go, serve.go, …)
 pkg/types/            public data shapes (ProviderConfig, Tenant, Request, …)
 pkg/store/            Store interface, MemoryStore, SQLStore
 pkg/preset/           built-in provider catalog + curated free-pool model list
 pkg/router/           core router: provider selection, failover, error classification
-pkg/server/           HTTP handler
+pkg/server/           HTTP handler: native + OpenAI-compatible API, embedded web UI (web/index.html)
+pkg/sqlopen/          opens SQLite (cgo or pure Go) with encrypted provider keys
 examples/             runnable usage examples (shell + Go)
 ```
 
-Module path is `github.com/mrmhthegreat/airouter` — replace `you` with your username
-before publishing.
+Module path is `github.com/mrmhthegreat/airouter`. Publishing under another
+GitHub name? Run `make rename MODULE=github.com/mrmhthegreat/airouter` once.
 
 ## Limits and honest notes
 
@@ -390,8 +492,8 @@ before publishing.
 - Free-tier limits change. The catalog has a `VerifiedOn` date on every entry
   and `CatalogVerifiedOn()` returns the newest one. If it is older than ~30
   days, re-check the provider's console.
-- Text only, no streaming. API keys given with `-key` are stored in plaintext
-  in the DB; prefer `-key-env` (the default for presets).
+- Chat has no true streaming (buffered SSE only) and no tool calling yet.
+  Audio-second counters (TTS/STT) reset on restart.
 - The tenant daily cap is counted in the providers' day buckets, so around
   midnight it is approximate.
 - Don't create extra accounts/projects to multiply a free quota — that breaks

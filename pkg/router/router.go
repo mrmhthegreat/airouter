@@ -9,6 +9,7 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -23,13 +24,19 @@ import (
 // Options configures a new Router. Only Store is required; everything else has
 // sensible defaults.
 type Options struct {
-	Store        store.Store
-	Strategy     string        // "priority" (default: use first provider until limited) | "spread"
-	MaxWait      time.Duration // how long Generate may wait for a briefly-limited provider (default 20s)
-	HTTPClient   *http.Client
-	Now          func() time.Time // injectable clock (tests)
-	RefreshEvery time.Duration    // how often provider configs are re-read from the Store (default 5s)
-	Logf         func(format string, args ...any)
+	Store    store.Store
+	Strategy string        // "priority" (default: use first provider until limited) | "spread"
+	MaxWait  time.Duration // how long Generate may wait for a briefly-limited provider (default 20s)
+	// AttemptTimeout bounds ONE upstream call (default 60s). A provider that
+	// hangs is put on a backoff cooldown so the next request skips it.
+	AttemptTimeout time.Duration
+	// RequestTimeout bounds a whole Generate call including every failover
+	// (default 2m). It returns types.ErrTimeout when exceeded.
+	RequestTimeout time.Duration
+	HTTPClient     *http.Client
+	Now            func() time.Time // injectable clock (tests)
+	RefreshEvery   time.Duration    // how often provider configs are re-read from the Store (default 5s)
+	Logf           func(format string, args ...any)
 }
 
 // candidate is one provider config paired with its live in-memory state.
@@ -42,13 +49,14 @@ type candidate struct {
 // Router is the main object. Construct once with New, then call Generate for
 // each request. The same Router is safe for concurrent use.
 type Router struct {
-	store    store.Store
-	strategy string
-	maxWait  time.Duration
-	client   *http.Client
-	now      func() time.Time
-	refresh  time.Duration
-	logf     func(string, ...any)
+	store                          store.Store
+	strategy                       string
+	maxWait                        time.Duration
+	attemptTimeout, requestTimeout time.Duration
+	client                         *http.Client
+	now                            func() time.Time
+	refresh                        time.Duration
+	logf                           func(string, ...any)
 
 	mu        sync.RWMutex
 	cands     []candidate
@@ -63,20 +71,28 @@ func New(o Options) (*Router, error) {
 		return nil, errors.New("airouter: Options.Store is required")
 	}
 	r := &Router{
-		store:    o.Store,
-		strategy: o.Strategy,
-		maxWait:  o.MaxWait,
-		client:   o.HTTPClient,
-		now:      o.Now,
-		refresh:  o.RefreshEvery,
-		logf:     o.Logf,
-		states:   map[int64]*providerState{},
+		store:          o.Store,
+		strategy:       o.Strategy,
+		maxWait:        o.MaxWait,
+		attemptTimeout: o.AttemptTimeout,
+		requestTimeout: o.RequestTimeout,
+		client:         o.HTTPClient,
+		now:            o.Now,
+		refresh:        o.RefreshEvery,
+		logf:           o.Logf,
+		states:         map[int64]*providerState{},
 	}
 	if r.strategy == "" {
 		r.strategy = "priority"
 	}
 	if r.maxWait == 0 {
 		r.maxWait = 20 * time.Second
+	}
+	if r.attemptTimeout == 0 {
+		r.attemptTimeout = 60 * time.Second
+	}
+	if r.requestTimeout == 0 {
+		r.requestTimeout = 2 * time.Minute
 	}
 	if r.client == nil {
 		r.client = &http.Client{}
@@ -239,6 +255,17 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 	failed := map[int64]bool{}
 	deadline := start.Add(r.maxWait)
 
+	// One overall budget for the whole request, failovers included.
+	parent := ctx
+	ctx, cancelAll := context.WithTimeout(ctx, r.requestTimeout)
+	defer cancelAll()
+	timedOut := func() error {
+		if parent.Err() == nil && ctx.Err() != nil {
+			return fmt.Errorf("%w after %s (%d provider(s) tried)", types.ErrTimeout, r.requestTimeout, len(attempts))
+		}
+		return parent.Err()
+	}
+
 	for {
 		now := r.now()
 		var picked *candidate
@@ -252,8 +279,8 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 				continue
 			}
 			remaining++
-			if c.cfg.Kind != "ollama" && c.cfg.ResolveKey() == "" {
-				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + ")"
+			if !c.cfg.HasKey() {
+				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + " or store one: airouter provider set-key)"
 				continue
 			}
 			ok, wait, daily, why := r.acquire(ctx, c.cfg, c.state, now)
@@ -272,9 +299,12 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 
 		if picked == nil {
 			if remaining == 0 || len(failed) > 0 && allDaily {
-				return nil, &types.AllFailedError{Attempts: attempts}
+				return nil, r.allFailed(attempts)
 			}
 			if allDaily || now.Add(minWait).After(deadline) || ctx.Err() != nil {
+				if err := timedOut(); err != nil && ctx.Err() != nil {
+					return nil, err
+				}
 				if minWait == time.Duration(1<<62-1) {
 					minWait = time.Hour
 				}
@@ -283,12 +313,12 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 			select {
 			case <-time.After(minWait + 20*time.Millisecond):
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, timedOut()
 			}
 			continue
 		}
 
-		text, tokens, err := r.callProvider(ctx, picked.cfg, msgs, req)
+		text, tokens, hdr, err := r.callProvider(ctx, picked.cfg, msgs, req)
 		var out *types.Response
 		if err == nil {
 			out = &types.Response{Text: text, Provider: picked.cfg.Name, Model: picked.cfg.Model, Tokens: tokens}
@@ -296,105 +326,32 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 				if j, ok := extractJSON(text); ok {
 					out.JSON = j
 				} else {
-					err = errors.New("model did not return valid JSON")
+					err = errBadResponse("model did not return valid JSON")
 				}
 			} else if strings.TrimSpace(text) == "" {
-				err = errors.New("empty response")
+				err = errBadResponse("empty response")
 			}
 		}
 		picked.state.release(tokens)
+		r.observe(ctx, picked, hdr, now)
 		errs := 0
 		if err != nil {
 			errs = 1
 		}
 		_ = r.store.AddUsage(ctx, req.TenantID, picked.cfg.ID, dayOf(picked.cfg, now), 1, tokens, errs)
 		if err == nil {
+			picked.state.markSuccess()
 			out.LatencyMS = r.now().Sub(start).Milliseconds()
 			out.Attempts = attempts
 			return out, nil
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, timedOut()
 		}
-		r.classify(ctx, picked, err)
-		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error()})
+		f := r.classify(ctx, picked, err)
+		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error(), Status: f.status, Kind: f.kind})
 		failed[picked.cfg.ID] = true
 	}
-}
-
-// classify turns an upstream error into the right cooldown for that provider.
-// 4xx with "daily" → pause until the provider's local midnight.
-// 401/403/404 → 24h pause (key or model is wrong).
-// Other 429/5xx → short cooldown.
-// Repeated 400 → 24h pause (likely a misconfigured request shape).
-func (r *Router) classify(ctx context.Context, c *candidate, err error) {
-	state, cfg, now := c.state, c.cfg, r.now()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	defer func() {
-		// Persist long pauses so other processes / restarts respect them.
-		if state.deadUntil.After(now) {
-			_ = r.store.SetPause(ctx, cfg.ID, state.deadUntil, state.deadReason)
-		}
-	}()
-	var he *types.HTTPError
-	if !errors.As(err, &he) {
-		if cfg.Kind == "ollama" || strings.Contains(err.Error(), "connection") {
-			state.coolUntil = now.Add(20 * time.Second)
-		}
-		return
-	}
-	low := strings.ToLower(he.Body)
-	switch {
-	case he.Code == 401 || he.Code == 403 || he.Code == 404:
-		state.deadUntil, state.deadReason = now.Add(24*time.Hour), "HTTP "+itoa(he.Code)+" (check key/model)"
-		r.logf("provider %s disabled for 24h: %s", cfg.Name, he.Error())
-	case he.Code == 429:
-		if he.RetryAfter > 5*time.Minute || strings.Contains(low, "perday") || strings.Contains(low, "per day") || strings.Contains(low, "daily") {
-			state.deadUntil, state.deadReason = now.Add(untilReset(cfg, now)), "daily limit"
-			r.logf("provider %s hit its daily limit; paused until reset", cfg.Name)
-		} else {
-			state.coolUntil = now.Add(maxDuration(he.RetryAfter, 30*time.Second))
-		}
-	case he.Code == 400:
-		state.bad400++
-		if state.bad400 >= 3 {
-			state.deadUntil, state.deadReason = now.Add(24*time.Hour), "repeated HTTP 400 (check model / json_mode / system_role)"
-		}
-	default:
-		state.coolUntil = now.Add(20 * time.Second)
-	}
-}
-
-func itoa(n int) string { return strings.TrimSpace(itoaSlow(n)) }
-
-func itoaSlow(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
-}
-
-func maxDuration(a, b time.Duration) time.Duration {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // ApplyPreset is a convenience wrapper that calls preset.Apply on p. Exposed so

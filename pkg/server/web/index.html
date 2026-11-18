@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>airouter</title>
+<style>
+:root {
+  --bg: #eef1f4; --panel: #ffffff; --ink: #14202b; --muted: #5d6b79; --line: #d5dce3;
+  --accent: #0b6b72; --accent-ink: #ffffff; --ok: #1f8a4c; --warn: #b7791f; --bad: #b3261e; --off: #8a96a3;
+  --code: #e6ebf0; --focus: #d97706;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e151c; --panel: #16202a; --ink: #e4ebf1; --muted: #92a1af; --line: #2a3846;
+    --accent: #4fc1c9; --accent-ink: #072a2d; --ok: #4cc27f; --warn: #e2a84a; --bad: #f0746c; --off: #6f7d8a; --code: #1d2a36;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.shell { display: grid; grid-template-columns: 184px 1fr; min-height: 100vh; }
+nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 4px; }
+nav h1 { margin: 0 0 14px 6px; font: 700 18px var(--mono); letter-spacing: -0.02em; }
+nav h1 i { font-style: normal; color: var(--accent); }
+nav button { text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+nav button[aria-current="page"] { background: var(--bg); color: var(--ink); font-weight: 600; }
+nav button:hover { color: var(--ink); }
+nav .who { margin-top: auto; font-size: 13px; color: var(--muted); padding: 6px; word-break: break-word; }
+nav .who button { padding: 2px 0; text-decoration: underline; }
+main { padding: 24px clamp(16px, 4vw, 40px); max-width: 1100px; width: 100%; }
+h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -0.01em; }
+.sub { margin: 0 0 18px; color: var(--muted); max-width: 64ch; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn { background: var(--accent); color: var(--accent-ink); border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+.btn.small { padding: 3px 9px; font-size: 13px; }
+.btn:disabled { opacity: .5; cursor: default; }
+input[type=text], input[type=password], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+.mono { font-family: var(--mono); font-size: 13px; }
+pre { background: var(--code); border-radius: 6px; padding: 12px; overflow: auto; margin: 6px 0 14px; font: 13px/1.5 var(--mono); }
+.hidden { display: none !important; }
+/* gate */
+.gate { max-width: 460px; margin: 12vh auto; padding: 0 16px; }
+.gate h1 { font: 700 28px var(--mono); margin: 0 0 6px; letter-spacing: -0.03em; }
+.gate h1 i { font-style: normal; color: var(--accent); }
+.gate p { color: var(--muted); }
+.err { color: var(--bad); margin-top: 8px; white-space: pre-wrap; }
+/* chat */
+.chat { display: grid; grid-template-columns: 1fr 260px; gap: 16px; align-items: start; }
+.log { display: flex; flex-direction: column; gap: 10px; min-height: 280px; max-height: 58vh; overflow: auto; padding: 4px 2px 12px; }
+.msg { padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; max-width: 88%; border: 1px solid var(--line); background: var(--panel); }
+.msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.msg.error { border-color: var(--bad); color: var(--bad); }
+.empty { color: var(--muted); padding: 24px 4px; }
+.route h3 { margin: 0 0 8px; font-size: 14px; }
+.route dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 13px; }
+.route dt { color: var(--muted); } .route dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+.hop { display: flex; gap: 8px; font-size: 13px; margin-top: 6px; }
+/* provider rails */
+.rails { display: flex; flex-direction: column; gap: 8px; }
+.rail { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: grid; grid-template-columns: 14px minmax(140px, 1.3fr) 2fr minmax(120px, 1fr); gap: 4px 14px; align-items: center; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.rail .name { font-weight: 600; } .rail .model { color: var(--muted); font: 12px var(--mono); word-break: break-all; }
+.bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+.bar.hot > span { background: var(--warn); } .bar.full > span { background: var(--bad); }
+.nums { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.state { font-size: 13px; text-align: right; }
+.totals { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 14px; }
+.totals b { display: block; font-size: 22px; font-family: var(--mono); }
+.totals span { color: var(--muted); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+.tabs { display: flex; gap: 6px; margin: 8px 0; }
+.tabs button { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--muted); }
+.tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+.copy { float: right; }
+.toast { position: fixed; bottom: 16px; right: 16px; background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 14px; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  nav { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px; }
+  nav h1 { margin: 0 12px 0 4px; align-self: center; } nav .who { margin: 0 0 0 auto; }
+  .chat { grid-template-columns: 1fr; }
+  .rail { grid-template-columns: 14px 1fr; } .rail .state { text-align: left; }
+}
+@media (prefers-reduced-motion: no-preference) { .bar > span { transition: width .4s ease; } }
+</style>
+</head>
+<body>
+
+<section id="gate" class="gate hidden">
+  <h1>air<i>outer</i></h1>
+  <p>Paste an airouter API key to chat, check usage and get the base URL for your own apps. Admin token works too.</p>
+  <label for="keyIn">API key</label>
+  <input id="keyIn" type="password" autocomplete="off" placeholder="air_… or admin token">
+  <div class="row" style="margin-top:10px">
+    <button class="btn" id="connect">Connect</button>
+    <label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" id="remember"> Remember on this device</label>
+  </div>
+  <div id="gateErr" class="err"></div>
+</section>
+
+<div id="app" class="shell hidden">
+  <nav aria-label="Sections">
+    <h1>air<i>outer</i></h1>
+    <button data-tab="chat" aria-current="page">Chat</button>
+    <button data-tab="usage">Usage</button>
+    <button data-tab="connect">Connect your app</button>
+    <button data-tab="admin" id="adminTab" class="hidden">Admin</button>
+    <div class="who"><span id="who"></span><br><button id="logout" class="btn ghost small">Sign out</button></div>
+  </nav>
+  <main>
+    <!-- CHAT -->
+    <section id="tab-chat">
+      <h2>Chat</h2>
+      <p class="sub">Each message goes to the best provider that still has quota. If one fails or is limited, the next one answers.</p>
+      <div class="chat">
+        <div class="card">
+          <div class="log" id="log" aria-live="polite"><div class="empty" id="emptyChat">Ask anything. The panel on the right shows which provider answered.</div></div>
+          <div class="row" style="margin:6px 0">
+            <div style="flex:1;min-width:140px"><label for="model">Model</label><select id="model"><option value="auto">auto (recommended)</option></select></div>
+            <label style="margin:18px 0 0;display:flex;gap:6px;align-items:center"><input type="checkbox" id="jsonMode"> JSON answer</label>
+            <button class="btn ghost small" id="clearChat" style="margin-top:18px">New chat</button>
+          </div>
+          <label for="sys">System prompt (optional)</label>
+          <textarea id="sys" rows="2"></textarea>
+          <label for="prompt" style="margin-top:8px">Message</label>
+          <textarea id="prompt" rows="3" placeholder="Write a message. Ctrl+Enter to send."></textarea>
+          <div class="row" style="margin-top:8px"><button class="btn" id="send">Send</button><span id="chatErr" class="err" style="margin:0"></span></div>
+        </div>
+        <aside class="card route" id="route"><h3>Last route</h3><div class="sub" style="margin:0">Nothing sent yet.</div></aside>
+      </div>
+    </section>
+
+    <!-- USAGE -->
+    <section id="tab-usage" class="hidden">
+      <h2>Usage</h2>
+      <p class="sub">Live state of every provider for this account. Daily quotas reset at each provider's own midnight.</p>
+      <div class="totals" id="totals"></div>
+      <div class="rails" id="rails"></div>
+    </section>
+
+    <!-- CONNECT -->
+    <section id="tab-connect" class="hidden">
+      <h2>Connect your app</h2>
+      <p class="sub">airouter speaks the OpenAI API. In any OpenAI SDK, editor plugin or tool, change the base URL and use your airouter key.</p>
+      <div class="card">
+        <label>Base URL</label><pre id="baseUrl" class="mono"></pre>
+        <div class="tabs" id="snipTabs" role="group" aria-label="Example language">
+          <button data-s="curl" aria-pressed="true">curl</button><button data-s="python" aria-pressed="false">Python</button>
+          <button data-s="js" aria-pressed="false">JavaScript</button><button data-s="env" aria-pressed="false">Env vars</button>
+        </div>
+        <button class="btn ghost small copy" id="copySnip">Copy</button>
+        <pre id="snip"></pre>
+        <p class="sub" style="margin:0">Use <code>model: "auto"</code> to let airouter choose. Rate-limited or failing providers are skipped automatically. If everything is busy you get HTTP 503 with a <code>Retry-After</code> header.</p>
+      </div>
+    </section>
+
+    <!-- ADMIN -->
+    <section id="tab-admin" class="hidden">
+      <h2>Admin</h2>
+      <p class="sub">Providers, API keys and tenants. Provider keys are stored encrypted and are never shown again.</p>
+      <div class="row" style="margin-bottom:12px">
+        <button class="btn" id="bootstrap">Add free-tier models</button>
+        <label style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" id="storeKeys" checked> Save keys found in server environment into the database</label>
+      </div>
+      <div class="card" style="overflow:auto"><table id="provTable"></table></div>
+      <h2 style="margin-top:22px">Tenants</h2>
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <input type="text" id="newTenant" placeholder="new tenant id, e.g. my-app" style="max-width:260px">
+          <input type="text" id="newLimit" placeholder="daily limit (0 = none)" style="max-width:180px">
+          <button class="btn" id="addTenant">Create tenant</button>
+        </div>
+        <div id="newKey" class="hidden"></div>
+        <div style="overflow:auto"><table id="tenantTable"></table></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const store = {
+  get() { try { return sessionStorage.getItem("air_key") || localStorage.getItem("air_key") || ""; } catch (e) { return ""; } },
+  set(k, remember) { try { sessionStorage.setItem("air_key", k); if (remember) localStorage.setItem("air_key", k); } catch (e) {} },
+  clear() { try { sessionStorage.removeItem("air_key"); localStorage.removeItem("air_key"); } catch (e) {} },
+};
+let KEY = "", ROLE = "", HISTORY = [], usageTimer = null;
+
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add("hidden"), 2600); }
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { Authorization: "Bearer " + KEY, ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+  let data = null; const text = await res.text();
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
+  if (!res.ok) {
+    const e = data && data.error; const msg = typeof e === "string" ? e : (e && e.message) || res.statusText;
+    const err = new Error(msg); err.status = res.status; err.data = data; err.retry = res.headers.get("Retry-After"); throw err;
+  }
+  return data;
+}
+function explain(err) {
+  let m = err.status ? "HTTP " + err.status + ": " + err.message : err.message;
+  if (err.retry) m += "\nTry again in " + err.retry + "s.";
+  const reasons = err.data && (err.data.reasons || (err.data.airouter && err.data.airouter.reasons));
+  if (reasons) m += "\n" + Object.entries(reasons).map(([k, v]) => "• " + k + ": " + v).join("\n");
+  const att = err.data && (err.data.attempts || (err.data.airouter && err.data.airouter.attempts));
+  if (att) m += "\n" + att.map((a) => "• " + a.provider + ": " + a.error).join("\n");
+  return m;
+}
+
+/* ---------- connect / gate ---------- */
+async function start(key, remember) {
+  KEY = key;
+  try {
+    const me = await api("/v1/whoami");
+    ROLE = me.role; store.set(key, remember);
+    $("gate").classList.add("hidden"); $("app").classList.remove("hidden");
+    $("who").textContent = ROLE === "admin" ? "Admin · tenant " + me.tenant.id : "Tenant " + me.tenant.id;
+    $("adminTab").classList.toggle("hidden", ROLE !== "admin");
+    loadModels(); renderConnect(); show("chat");
+  } catch (e) {
+    KEY = ""; store.clear();
+    $("app").classList.add("hidden"); $("gate").classList.remove("hidden");
+    $("gateErr").textContent = e.status === 401 ? "That key was not accepted. Check it and try again." : explain(e);
+  }
+}
+$("connect").onclick = () => { const k = $("keyIn").value.trim(); if (k) start(k, $("remember").checked); };
+$("keyIn").addEventListener("keydown", (e) => { if (e.key === "Enter") $("connect").click(); });
+$("logout").onclick = () => { store.clear(); KEY = ""; HISTORY = []; location.reload(); };
+
+/* ---------- tabs ---------- */
+function show(tab) {
+  document.querySelectorAll("nav [data-tab]").forEach((b) => {
+    if (b.dataset.tab === tab) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  ["chat", "usage", "connect", "admin"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  clearInterval(usageTimer);
+  if (tab === "usage") { loadUsage(); usageTimer = setInterval(() => { if (!document.hidden) loadUsage(); }, 8000); }
+  if (tab === "admin") loadAdmin();
+}
+document.querySelectorAll("nav [data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+
+/* ---------- chat ---------- */
+async function loadModels() {
+  try {
+    const m = await api("/v1/models"); const sel = $("model");
+    sel.replaceChildren(h("option", { value: "auto" }, "auto (recommended)"), ...m.data.filter((x) => x.id !== "auto").map((x) => h("option", { value: x.id }, x.id)));
+  } catch (e) { /* the list is optional */ }
+}
+function addMsg(role, text, cls) {
+  $("emptyChat")?.remove();
+  const d = h("div", { class: "msg " + role + (cls ? " " + cls : "") }, text); $("log").append(d); $("log").scrollTop = $("log").scrollHeight; return d;
+}
+function setRoute(data, ms) {
+  const a = (data.airouter && data.airouter.attempts) || [];
+  const box = $("route"); box.replaceChildren(h("h3", {}, "Last route"),
+    h("dl", {}, h("dt", {}, "Provider"), h("dd", {}, data.airouter.provider), h("dt", {}, "Model"), h("dd", {}, data.model),
+      h("dt", {}, "Tokens"), h("dd", {}, data.usage.total_tokens || "n/a"), h("dt", {}, "Time"), h("dd", {}, ms + " ms")),
+    a.length ? h("div", { class: "sub", style: "margin:10px 0 0" }, "Switched after " + a.length + " failed provider" + (a.length > 1 ? "s" : "") + ":") : null,
+    ...a.map((x) => h("div", { class: "hop" }, h("span", { class: "dot bad" }), h("span", {}, x.provider + (x.status ? " (" + x.status + ")" : "") + ": " + (x.kind || "failed")))));
+}
+async function send() {
+  const text = $("prompt").value.trim(); if (!text) return;
+  $("chatErr").textContent = ""; $("send").disabled = true;
+  addMsg("user", text); HISTORY.push({ role: "user", content: text }); $("prompt").value = "";
+  const msgs = ($("sys").value.trim() ? [{ role: "system", content: $("sys").value.trim() }] : []).concat(HISTORY);
+  const t0 = performance.now(), wait = addMsg("assistant", "…");
+  try {
+    const body = { model: $("model").value, messages: msgs }; if ($("jsonMode").checked) body.response_format = { type: "json_object" };
+    const data = await api("/v1/chat/completions", { method: "POST", body: JSON.stringify(body) });
+    const out = data.choices[0].message.content; wait.textContent = out; HISTORY.push({ role: "assistant", content: out });
+    setRoute(data, Math.round(performance.now() - t0));
+  } catch (e) { wait.className = "msg error"; wait.textContent = explain(e); HISTORY.pop(); }
+  $("send").disabled = false; $("log").scrollTop = $("log").scrollHeight;
+}
+$("send").onclick = send;
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); });
+$("clearChat").onclick = () => { HISTORY = []; $("log").replaceChildren(h("div", { class: "empty", id: "emptyChat" }, "New chat. Earlier messages are not sent.")); };
+
+/* ---------- usage ---------- */
+function fmtDur(s) { if (s == null) return ""; const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60); return hh ? hh + "h " + mm + "m" : mm + "m"; }
+function stateClass(s) { if (s === "ok") return "ok"; if (s === "cooling down") return "warn"; if (s.startsWith("paused") || s.includes("limit")) return "bad"; return ""; }
+async function loadUsage() {
+  try {
+    const d = await api("/v1/usage"), u = d.usage;
+    $("totals").replaceChildren(
+      h("div", {}, h("b", {}, u.requests_today), h("span", {}, "requests today")), h("div", {}, h("b", {}, u.tokens_today), h("span", {}, "tokens today")),
+      h("div", {}, h("b", {}, u.tenant_daily_limit || "none"), h("span", {}, "your daily cap")));
+    $("rails").replaceChildren(...d.providers.map((p) => {
+      const pct = p.rpd ? Math.min(100, Math.round((p.used_today / p.rpd) * 100)) : 0;
+      const u = p.upstream;
+      let up = "";
+      if (u && u.remaining_requests >= 0) {
+        const left = u.reset_requests_seconds > 0 ? Math.max(0, u.reset_requests_seconds - Math.round((Date.now() - Date.parse(u.as_of)) / 1000)) : 0;
+        up = " · provider reports " + u.remaining_requests + (u.limit_requests > 0 ? " of " + u.limit_requests : "") + " left" + (left ? ", resets in " + (left >= 60 ? Math.floor(left / 60) + "m " + (left % 60) + "s" : left + "s") : "");
+      }
+      const src = p.limits_source === "reported" ? " (limit from provider)" : "";
+      return h("div", { class: "rail" }, h("span", { class: "dot " + stateClass(p.state) }),
+        h("div", {}, h("div", { class: "name" }, p.name), h("div", { class: "model" }, p.model)),
+        h("div", {}, h("div", { class: "bar" + (pct >= 100 ? " full" : pct >= 80 ? " hot" : ""), role: "img", "aria-label": pct + "% of daily limit used" }, h("span", { style: "width:" + (p.rpd ? pct : 0) + "%" })),
+          h("div", { class: "nums" }, p.used_today + (p.rpd ? " / " + p.rpd : "") + src + " today · " + p.requests_last_minute + " in last minute" + up)),
+        h("div", { class: "state" }, p.state, h("div", { class: "nums" }, "resets in " + fmtDur(p.resets_in_seconds))));
+    }));
+  } catch (e) { $("rails").replaceChildren(h("div", { class: "err" }, explain(e))); }
+}
+
+/* ---------- connect ---------- */
+let snipKind = "curl";
+function snippet(kind) {
+  const base = location.origin + "/v1", k = KEY && ROLE === "tenant" ? KEY : "YOUR_AIROUTER_KEY";
+  return {
+    curl: `curl ${base}/chat/completions \\\n  -H "Authorization: Bearer ${k}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"auto","messages":[{"role":"user","content":"Hello"}]}'`,
+    python: `from openai import OpenAI\n\nclient = OpenAI(base_url="${base}", api_key="${k}")\nr = client.chat.completions.create(\n    model="auto",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(r.choices[0].message.content)`,
+    js: `import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: "${base}", apiKey: "${k}" });\nconst r = await client.chat.completions.create({\n  model: "auto",\n  messages: [{ role: "user", content: "Hello" }],\n});\nconsole.log(r.choices[0].message.content);`,
+    env: `OPENAI_BASE_URL=${base}\nOPENAI_API_KEY=${k}`,
+  }[kind];
+}
+function renderConnect() { $("baseUrl").textContent = location.origin + "/v1"; $("snip").textContent = snippet(snipKind); }
+document.querySelectorAll("#snipTabs button").forEach((b) => b.addEventListener("click", () => {
+  snipKind = b.dataset.s; document.querySelectorAll("#snipTabs button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); renderConnect();
+}));
+$("copySnip").onclick = async () => { try { await navigator.clipboard.writeText($("snip").textContent); toast("Copied"); } catch (e) { toast("Select the text and copy it manually"); } };
+
+/* ---------- admin ---------- */
+async function loadAdmin() {
+  try {
+    const ps = await api("/v1/providers");
+    $("provTable").replaceChildren(h("tr", {}, ...["", "Name", "Model", "State", "Key", "Used", ""].map((x) => h("th", {}, x))),
+      ...ps.map((p) => h("tr", {}, h("td", {}, h("span", { class: "dot " + stateClass(p.state) })), h("td", {}, p.name), h("td", { class: "mono" }, p.model), h("td", {}, p.state),
+        h("td", { class: "mono" }, p.key_source + (p.key_hint ? " " + p.key_hint : "")), h("td", {}, p.used_today + (p.rpd ? "/" + p.rpd : "")),
+        h("td", {}, h("div", { class: "row" },
+          h("button", { class: "btn ghost small", onclick: () => act(p.id, "reset") }, "Retry now"),
+          h("button", { class: "btn ghost small", onclick: () => act(p.id, p.state === "disabled" ? "enable" : "disable") }, p.state === "disabled" ? "Enable" : "Disable"),
+          h("button", { class: "btn ghost small", onclick: () => setKey(p) }, "Set key"))))));
+    const ts = await api("/v1/tenants");
+    $("tenantTable").replaceChildren(h("tr", {}, ...["Tenant", "Daily cap", "Created", ""].map((x) => h("th", {}, x))),
+      ...ts.map((t) => h("tr", {}, h("td", {}, t.id), h("td", {}, t.daily_request_limit || "none"), h("td", {}, (t.created_at || "").slice(0, 10)),
+        h("td", {}, h("button", { class: "btn ghost small", onclick: () => rotate(t.id) }, "Rotate key")))));
+  } catch (e) { toast(explain(e)); }
+}
+async function act(id, a) { try { await api("/v1/providers/" + id + "/" + a, { method: "POST" }); toast("Done"); loadAdmin(); } catch (e) { toast(explain(e)); } }
+async function setKey(p) {
+  const k = prompt("New API key for " + p.name + " (stored encrypted, never shown again):"); if (!k) return;
+  try { await api("/v1/providers/" + p.id + "/key", { method: "POST", body: JSON.stringify({ api_key: k.trim() }) }); toast("Key saved"); loadAdmin(); } catch (e) { toast(explain(e)); }
+}
+function showKey(title, key) {
+  const box = $("newKey"); box.classList.remove("hidden");
+  box.replaceChildren(h("div", { class: "sub", style: "margin:0" }, title + " Copy it now. It is not shown again."), h("pre", { class: "mono" }, key));
+}
+async function rotate(id) {
+  if (!confirm("Rotate the key for " + id + "? The old key stops working immediately.")) return;
+  try { const r = await api("/v1/tenants/" + encodeURIComponent(id) + "/rotate-key", { method: "POST" }); showKey("New key for " + id + ".", r.api_key); } catch (e) { toast(explain(e)); }
+}
+$("addTenant").onclick = async () => {
+  const id = $("newTenant").value.trim(); if (!id) return;
+  try { const r = await api("/v1/tenants", { method: "POST", body: JSON.stringify({ id, daily_request_limit: parseInt($("newLimit").value || "0", 10) || 0 }) }); showKey("Tenant " + id + " created.", r.api_key); $("newTenant").value = ""; loadAdmin(); } catch (e) { toast(explain(e)); }
+};
+$("bootstrap").onclick = async () => {
+  try { const r = await api("/v1/bootstrap" + ($("storeKeys").checked ? "?store_keys=1" : ""), { method: "POST" }); toast("Added " + r.added.length + ", skipped " + r.skipped.length); loadAdmin(); } catch (e) { toast(explain(e)); }
+};
+
+/* ---------- boot ---------- */
+const saved = store.get();
+if (saved) start(saved, false); else $("gate").classList.remove("hidden");
+</script>
+</body>
+</html>

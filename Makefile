@@ -7,7 +7,7 @@ CLI_BIN := $(BIN_DIR)/airouter
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: help build build-pure build-cgo test test-verbose vet fmt tidy clean install run-serve
+.PHONY: rename help build build-pure build-cgo test test-verbose vet fmt tidy clean install run-serve
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -48,9 +48,14 @@ clean: ## Remove built artifacts
 install: build ## Install the CLI into $GOBIN
 	$(GO) install ./cmd/airouter
 
-run-serve: build ## Run the server on :8080 (set AIROUTER_ADMIN_TOKEN first)
-	AIROUTER_ADMIN_TOKEN ?= dev-token
-	./$(CLI_BIN) serve -addr :8080
+run-serve: build ## Run the server on :8080 (UI at /, OpenAI API at /v1)
+	AIROUTER_ADMIN_TOKEN=$${AIROUTER_ADMIN_TOKEN:-dev-token} ./$(CLI_BIN) serve -addr :8080
+
+rename: ## Change the Go module path: make rename MODULE=github.com/yourname/airouter
+	@test -n "$(MODULE)" || (echo "usage: make rename MODULE=github.com/yourname/airouter"; exit 1)
+	@old=$$(awk '/^module /{print $$2}' go.mod); \
+	grep -rl --include='*.go' --include='go.mod' --include='*.md' --include='*.sh' "$$old" . | xargs sed -i "s#$$old#$(MODULE)#g"; \
+	echo "module is now $(MODULE)"
 
 # Default: build
 .DEFAULT_GOAL := build
