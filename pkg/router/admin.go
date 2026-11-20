@@ -51,6 +51,33 @@ func (r *Router) Authenticate(ctx context.Context, key string) (*types.Tenant, e
 	return t, nil
 }
 
+// UpdateTenantProfile lets a tenant change its own display name and timezone.
+// Quota (daily_request_limit) and the disabled flag are operator-only and are
+// deliberately not changeable here.
+func (r *Router) UpdateTenantProfile(ctx context.Context, id, name, tz string) (*types.Tenant, error) {
+	t, err := r.store.TenantByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, types.ErrUnknownTenant
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		name = t.Name
+	}
+	if tz == "" {
+		tz = t.TZ
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return nil, fmt.Errorf("unknown tz %q", tz)
+	}
+	if err := r.store.UpdateTenantProfile(ctx, id, name, tz); err != nil {
+		return nil, err
+	}
+	t.Name, t.TZ = name, tz
+	return t, nil
+}
+
 // RotateTenantKey issues a new API key for a tenant and invalidates the old
 // one immediately. The new key is returned once; only its hash is stored.
 func (r *Router) RotateTenantKey(ctx context.Context, tenantID string) (string, error) {
@@ -186,6 +213,12 @@ type BootstrapOptions struct {
 	// Keys supplies keys directly, by env var name (e.g. "GROQ_API_KEY"), for
 	// callers that never use environment variables. They are stored encrypted.
 	Keys map[string]string
+	// TenantID makes the imported models private to that tenant (their keys are
+	// then stored in the DB, never read from env vars at request time).
+	TenantID string
+	// NoEnv stops the server's own environment variables from being copied into
+	// a tenant's models. Set it whenever the caller is a tenant, not the operator.
+	NoEnv bool
 }
 
 // BootstrapProvidersOpts is BootstrapProviders with extra options.
@@ -215,6 +248,19 @@ func (r *Router) BootstrapProvidersOpts(ctx context.Context, o BootstrapOptions)
 			continue
 		}
 		cfg := m.ToProviderConfig()
+		if o.NoEnv && cfg.Kind == "ollama" {
+			continue // tenants add Ollama models through AddTenantOllama (which honours the policy)
+		}
+		cfg.TenantID = o.TenantID
+		envName := cfg.APIKeyEnv
+		if o.TenantID != "" && cfg.APIKeyEnv != "" {
+			if k := strings.TrimSpace(o.Keys[cfg.APIKeyEnv]); k != "" {
+				cfg.APIKey = k
+			} else if !o.NoEnv {
+				cfg.APIKey = cfg.ResolveKey()
+			}
+			cfg.APIKeyEnv = ""
+		}
 		if k := strings.TrimSpace(o.Keys[cfg.APIKeyEnv]); k != "" {
 			cfg.APIKey, cfg.APIKeyEnv = k, ""
 		}
@@ -222,7 +268,7 @@ func (r *Router) BootstrapProvidersOpts(ctx context.Context, o BootstrapOptions)
 		// they're Ollama (no key needed). This keeps bootstrap from seeding
 		// a dozen broken entries on a fresh machine.
 		if !cfg.HasKey() {
-			skipped = append(skipped, cfg.Name+" (no key: set $"+cfg.APIKeyEnv+" or pass it in)")
+			skipped = append(skipped, cfg.Name+" (no key: set $"+envName+" or pass it in)")
 			continue
 		}
 		key := cfg.TenantID + "|" + cfg.Name

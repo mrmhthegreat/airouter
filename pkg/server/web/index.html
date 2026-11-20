@@ -112,6 +112,7 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
   <nav aria-label="Sections">
     <h1>air<i>outer</i></h1>
     <button data-tab="chat" aria-current="page">Chat</button>
+    <button data-tab="models">My models</button>
     <button data-tab="usage">Usage</button>
     <button data-tab="connect">Connect your app</button>
     <button data-tab="admin" id="adminTab" class="hidden">Admin</button>
@@ -137,6 +138,48 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
           <div class="row" style="margin-top:8px"><button class="btn" id="send">Send</button><span id="chatErr" class="err" style="margin:0"></span></div>
         </div>
         <aside class="card route" id="route"><h3>Last route</h3><div class="sub" style="margin:0">Nothing sent yet.</div></aside>
+      </div>
+    </section>
+
+    <!-- MY MODELS -->
+    <section id="tab-models" class="hidden">
+      <h2>My models</h2>
+      <p class="sub">Models, keys and limits you add here belong to you alone. They are tried before the shared models, and other users never see them.</p>
+      <div id="actAs" class="row hidden" style="margin-bottom:12px">
+        <div style="min-width:220px"><label for="actTenant">Managing models for tenant</label><select id="actTenant"></select></div>
+      </div>
+      <div class="card" style="overflow:auto">
+        <table id="myTable"></table>
+        <div id="myEmpty" class="empty hidden">You have no models of your own yet. Add some below.</div>
+      </div>
+      <p id="sharedNote" class="sub" style="margin-top:8px"></p>
+
+      <h2 style="margin-top:22px">Add models</h2>
+      <div class="tabs" id="addTabs" role="group" aria-label="Where to add models from">
+        <button data-p="list" aria-pressed="true">From the list</button><button data-p="ollama" aria-pressed="false">Ollama (local)</button><button data-p="json" aria-pressed="false">JSON file</button>
+      </div>
+      <div class="card" id="pane-list">
+        <div class="row" style="align-items:flex-end">
+          <div style="min-width:180px"><label for="catProv">Provider</label><select id="catProv"></select></div>
+          <div style="flex:1;min-width:240px"><label for="catKey" id="catKeyLbl">Your API key</label><input id="catKey" type="password" autocomplete="off" placeholder="paste your key; it is stored encrypted and never shown again"></div>
+        </div>
+        <div id="catModels" style="margin:12px 0"></div>
+        <div class="row"><button class="btn" id="catAdd">Add selected models</button><button class="btn ghost small" id="catAll">Select all</button><span id="catMsg" class="sub" style="margin:0"></span></div>
+      </div>
+      <div class="card hidden" id="pane-ollama">
+        <p class="sub" id="ollamaInfo">Checking Ollama…</p>
+        <div id="ollamaModels"></div>
+        <div class="row"><button class="btn" id="ollamaAdd">Add selected models</button><button class="btn ghost small" id="ollamaRefresh">Check again</button><span id="ollamaMsg" class="sub" style="margin:0"></span></div>
+      </div>
+      <div class="card hidden" id="pane-json">
+        <p class="sub">Use the same format as <code>providers.json</code>. Use <code>preset</code> and <code>model</code>, plus your own <code>api_key</code>. Environment-variable keys are not allowed for users.</p>
+        <textarea id="jsonIn" rows="9" class="mono" placeholder='{"providers":[{"preset":"groq","model":"openai/gpt-oss-20b","api_key":"gsk_...","rpm":30,"rpd":1000}]}'></textarea>
+        <div class="row" style="margin-top:8px">
+          <input type="file" id="jsonFile" accept=".json,application/json" aria-label="Choose a JSON file">
+          <button class="btn" id="jsonImport">Import</button>
+          <button class="btn ghost" id="jsonExport">Download my models (no keys)</button>
+          <span id="jsonMsg" class="sub" style="margin:0;white-space:pre-wrap"></span>
+        </div>
       </div>
     </section>
 
@@ -186,6 +229,22 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
     </section>
   </main>
 </div>
+<dialog id="limDlg" style="border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);padding:18px;max-width:340px;width:92%">
+  <form method="dialog" id="limForm">
+    <h2 id="limTitle" style="font-size:17px"></h2>
+    <p class="sub" style="margin-bottom:10px">0 means no local cap. If the provider reports its own limit, that one is used.</p>
+    <div class="row">
+      <div style="flex:1"><label for="lRpm">Per minute</label><input id="lRpm" type="text" inputmode="numeric"></div>
+      <div style="flex:1"><label for="lRpd">Per day</label><input id="lRpd" type="text" inputmode="numeric"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:1"><label for="lTpm">Tokens/min</label><input id="lTpm" type="text" inputmode="numeric"></div>
+      <div style="flex:1"><label for="lWorkers">Parallel calls</label><input id="lWorkers" type="text" inputmode="numeric"></div>
+      <div style="flex:1"><label for="lPrio">Priority</label><input id="lPrio" type="text" inputmode="numeric"></div>
+    </div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn ghost" value="cancel">Cancel</button><button class="btn" id="limSave" value="ok">Save limits</button></div>
+  </form>
+</dialog>
 <div id="toast" class="toast hidden" role="status"></div>
 
 <script>
@@ -196,7 +255,7 @@ const store = {
   set(k, remember) { try { sessionStorage.setItem("air_key", k); if (remember) localStorage.setItem("air_key", k); } catch (e) {} },
   clear() { try { sessionStorage.removeItem("air_key"); localStorage.removeItem("air_key"); } catch (e) {} },
 };
-let KEY = "", ROLE = "", HISTORY = [], usageTimer = null;
+let KEY = "", ROLE = "", HISTORY = [], usageTimer = null, ACT_AS = "";
 
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -209,7 +268,7 @@ function h(tag, attrs, ...kids) {
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add("hidden"), 2600); }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { Authorization: "Bearer " + KEY, ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+  const res = await fetch(path, { ...opts, headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}), ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
   let data = null; const text = await res.text();
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
   if (!res.ok) {
@@ -253,10 +312,11 @@ function show(tab) {
   document.querySelectorAll("nav [data-tab]").forEach((b) => {
     if (b.dataset.tab === tab) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
-  ["chat", "usage", "connect", "admin"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  ["chat", "models", "usage", "connect", "admin"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
   clearInterval(usageTimer);
   if (tab === "usage") { loadUsage(); usageTimer = setInterval(() => { if (!document.hidden) loadUsage(); }, 8000); }
   if (tab === "admin") loadAdmin();
+  if (tab === "models") loadMine();
 }
 document.querySelectorAll("nav [data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
 
@@ -378,6 +438,128 @@ $("addTenant").onclick = async () => {
 $("bootstrap").onclick = async () => {
   try { const r = await api("/v1/bootstrap" + ($("storeKeys").checked ? "?store_keys=1" : ""), { method: "POST" }); toast("Added " + r.added.length + ", skipped " + r.skipped.length); loadAdmin(); } catch (e) { toast(explain(e)); }
 };
+
+/* ---------- my models ---------- */
+let CATALOG = null, MINE = [];
+const post = (path, obj) => api(path, { method: "POST", body: obj === undefined ? undefined : JSON.stringify(obj) });
+function stateDot(s) { return h("span", { class: "dot " + stateClass(s), title: s }); }
+
+async function loadMine() {
+  if (ROLE === "admin" && !$("actTenant").options.length) {
+    try {
+      const ts = await api("/v1/tenants");
+      $("actTenant").replaceChildren(...ts.map((t) => h("option", { value: t.id }, t.id)));
+      ACT_AS = $("actTenant").value; $("actAs").classList.remove("hidden");
+    } catch (e) {}
+  }
+  try {
+    const d = await api("/v1/me/providers"); MINE = d.own;
+    $("myEmpty").classList.toggle("hidden", d.own.length > 0);
+    $("myTable").replaceChildren(...(d.own.length ? [h("tr", {}, ...["", "Model", "Key", "Used today", "Limits", ""].map((x) => h("th", {}, x)))] : []),
+      ...d.own.map((p) => h("tr", {}, h("td", {}, stateDot(p.state)),
+        h("td", {}, h("div", {}, p.name), h("div", { class: "mono", style: "color:var(--muted)" }, p.model + " · " + p.state)),
+        h("td", { class: "mono" }, p.key_source === "not needed" ? "none needed" : (p.key_hint || p.key_source)),
+        h("td", {}, p.used_today + (p.rpd ? " / " + p.rpd : "")),
+        h("td", { class: "mono" }, (p.rpm || "∞") + "/min · " + (p.tpm ? p.tpm + " tok/min" : "no token cap")),
+        h("td", {}, h("div", { class: "row" },
+          h("button", { class: "btn ghost small", onclick: () => editLimits(p) }, "Limits"),
+          p.kind === "ollama" ? null : h("button", { class: "btn ghost small", onclick: () => newKey(p) }, "Change key"),
+          h("button", { class: "btn ghost small", onclick: () => mineAct(p.id, "reset") }, "Retry now"),
+          h("button", { class: "btn ghost small", onclick: () => mineAct(p.id, p.state === "disabled" ? "enable" : "disable") }, p.state === "disabled" ? "Turn on" : "Turn off"),
+          h("button", { class: "btn ghost small", onclick: () => removeMine(p) }, "Remove"))))));
+    const n = d.shared.length;
+    $("sharedNote").textContent = n ? n + " shared model" + (n > 1 ? "s" : "") + " from the server owner also serve your requests after yours: " + d.shared.slice(0, 6).map((x) => x.name).join(", ") + (n > 6 ? ", …" : "") + "." : "No shared models are set up on this server.";
+    if (!CATALOG) { CATALOG = await api("/v1/me/catalog"); }
+    else { CATALOG = await api("/v1/me/catalog"); }
+    renderCatalog();
+  } catch (e) { toast(explain(e)); }
+}
+$("actTenant").addEventListener("change", () => { ACT_AS = $("actTenant").value; loadMine(); loadModels(); });
+
+async function mineAct(id, a) { try { await post("/v1/me/providers/" + id + "/" + a); loadMine(); } catch (e) { toast(explain(e)); } }
+async function newKey(p) {
+  const k = prompt("New API key for " + p.name + ".\nIt is stored encrypted and never shown again."); if (!k) return;
+  try { await post("/v1/me/providers/" + p.id + "/key", { api_key: k.trim() }); toast("Key saved"); loadMine(); } catch (e) { toast(explain(e)); }
+}
+async function removeMine(p) {
+  if (!confirm("Remove " + p.name + "? Its key is deleted from the server.")) return;
+  try { await api("/v1/me/providers/" + p.id, { method: "DELETE" }); loadMine(); } catch (e) { toast(explain(e)); }
+}
+let limTarget = null;
+function editLimits(p) {
+  limTarget = p; $("limTitle").textContent = p.name;
+  $("lRpm").value = p.rpm; $("lRpd").value = p.rpd; $("lTpm").value = p.tpm; $("lWorkers").value = p.workers || 2; $("lPrio").value = p.priority;
+  $("limDlg").showModal();
+}
+$("limForm").addEventListener("submit", async (e) => {
+  if (e.submitter && e.submitter.value !== "ok") return;
+  const n = (id) => Math.max(0, parseInt($(id).value || "0", 10) || 0);
+  try { await post("/v1/me/providers/" + limTarget.id + "/limits", { rpm: n("lRpm"), rpd: n("lRpd"), tpm: n("lTpm"), workers: n("lWorkers"), priority: n("lPrio") }); toast("Limits saved"); loadMine(); } catch (err) { toast(explain(err)); }
+});
+
+/* add: from the list */
+function renderCatalog() {
+  const sel = $("catProv"), keep = sel.value;
+  sel.replaceChildren(...CATALOG.providers.map((p) => h("option", { value: p.preset }, p.preset)));
+  if (keep) sel.value = keep;
+  renderCatModels();
+}
+function renderCatModels() {
+  const pv = CATALOG.providers.find((p) => p.preset === $("catProv").value); if (!pv) return;
+  $("catKeyLbl").textContent = "Your " + pv.preset + " API key" + (pv.key_env ? " (" + pv.key_env + ")" : "");
+  $("catModels").replaceChildren(...CATALOG.models.filter((m) => m.preset === pv.preset).map((m) =>
+    h("label", { style: "display:flex;gap:8px;align-items:baseline;color:var(--ink);font-size:14px;margin:0 0 6px" },
+      h("input", Object.assign({ type: "checkbox", value: m.model, class: "catChk" }, m.added ? { disabled: "disabled" } : {})),
+      h("span", {}, m.model, h("span", { class: "mono", style: "color:var(--muted)" }, " · " + m.category + " · " + (m.rpm ? m.rpm + "/min" : "no per-min cap") + (m.rpd ? " · " + m.rpd + "/day" : "") + (m.added ? " · already added" : ""))))));
+}
+$("catProv").addEventListener("change", renderCatModels);
+$("catAll").onclick = () => document.querySelectorAll(".catChk:not(:disabled)").forEach((c) => { c.checked = true; });
+$("catAdd").onclick = async () => {
+  const models = [...document.querySelectorAll(".catChk:checked")].map((c) => c.value);
+  if (!models.length) { $("catMsg").textContent = "Tick at least one model."; return; }
+  if (!$("catKey").value.trim()) { $("catMsg").textContent = "Paste your API key first."; return; }
+  try {
+    const r = await post("/v1/me/catalog/add", { preset: $("catProv").value, api_key: $("catKey").value.trim(), models });
+    $("catKey").value = ""; $("catMsg").textContent = "Added " + r.added.length + (r.skipped && r.skipped.length ? ". Skipped: " + r.skipped.join("; ") : ""); loadMine();
+  } catch (e) { $("catMsg").textContent = explain(e); }
+};
+
+/* add: Ollama */
+async function loadOllama() {
+  try {
+    const d = await api("/v1/me/ollama"); const have = new Set(MINE.map((p) => p.model));
+    $("ollamaInfo").textContent = d.available ? (d.models.length ? "Models installed on this server's Ollama. They run on the server's hardware, so they are slower, but they never hit a quota." : "Ollama is running but has no models. Install one with: ollama pull gemma3:4b") : d.error;
+    $("ollamaModels").replaceChildren(...d.models.map((m) => h("label", { style: "display:flex;gap:8px;align-items:baseline;color:var(--ink);font-size:14px;margin:0 0 6px" },
+      h("input", Object.assign({ type: "checkbox", value: m.name, class: "olChk" }, have.has(m.name) ? { disabled: "disabled" } : {})),
+      h("span", {}, m.name, h("span", { class: "mono", style: "color:var(--muted)" }, " · " + (m.parameter_size || "") + " " + m.size_gb + " GB" + (have.has(m.name) ? " · already added" : ""))))));
+  } catch (e) { $("ollamaInfo").textContent = explain(e); }
+}
+$("ollamaRefresh").onclick = loadOllama;
+$("ollamaAdd").onclick = async () => {
+  const models = [...document.querySelectorAll(".olChk:checked")].map((c) => c.value); if (!models.length) { $("ollamaMsg").textContent = "Tick at least one model."; return; }
+  try { const r = await post("/v1/me/ollama/add", { models }); $("ollamaMsg").textContent = "Added " + r.added.length + (r.skipped && r.skipped.length ? ". Skipped: " + r.skipped.join("; ") : ""); await loadMine(); loadOllama(); } catch (e) { $("ollamaMsg").textContent = explain(e); }
+};
+
+/* add: JSON */
+$("jsonFile").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) $("jsonIn").value = await f.text(); });
+$("jsonImport").onclick = async () => {
+  let body; try { body = JSON.parse($("jsonIn").value); } catch (e) { $("jsonMsg").textContent = "That is not valid JSON: " + e.message; return; }
+  try {
+    const r = await post("/v1/me/import", body); const bad = Object.entries(r.failed || {});
+    $("jsonMsg").textContent = "Added " + (r.added || []).length + (bad.length ? "\nNot added:\n" + bad.map(([k, v]) => "• " + k + ": " + v).join("\n") : ""); loadMine();
+  } catch (e) { $("jsonMsg").textContent = explain(e); }
+};
+$("jsonExport").onclick = async () => {
+  try {
+    const res = await fetch("/v1/me/export", { headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}) } });
+    const url = URL.createObjectURL(await res.blob()); const a = h("a", { href: url, download: "airouter-models.json" }); document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  } catch (e) { toast(explain(e)); }
+};
+document.querySelectorAll("#addTabs button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#addTabs button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  ["list", "ollama", "json"].forEach((p) => $("pane-" + p).classList.toggle("hidden", p !== b.dataset.p));
+  if (b.dataset.p === "ollama") loadOllama();
+}));
 
 /* ---------- boot ---------- */
 const saved = store.get();

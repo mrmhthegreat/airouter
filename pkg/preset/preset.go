@@ -75,16 +75,18 @@ var Definitions = map[string]Definition{
 		APIKeyEnv: "OPENROUTER_API_KEY",
 		ResetTZ:   "UTC",
 	},
-	"cerebras": {
-		Kind:      "openai",
-		BaseURL:   "https://api.cerebras.ai/v1",
-		APIKeyEnv: "CEREBRAS_API_KEY",
-		ResetTZ:   "UTC",
-	},
 	"mistral": {
 		Kind:      "openai",
 		BaseURL:   "https://api.mistral.ai/v1",
 		APIKeyEnv: "MISTRAL_API_KEY",
+		ResetTZ:   "UTC",
+	},
+	// Z.AI (Zhipu) GLM. The Flash models are free; they are limited by concurrency
+	// (1 request at a time per model), not by tokens or requests per minute.
+	"zai": {
+		Kind:      "openai",
+		BaseURL:   "https://api.z.ai/api/paas/v4",
+		APIKeyEnv: "ZAI_API_KEY",
 		ResetTZ:   "UTC",
 	},
 	"sambanova": {
@@ -93,10 +95,31 @@ var Definitions = map[string]Definition{
 		APIKeyEnv: "SAMBANOVA_API_KEY",
 		ResetTZ:   "UTC",
 	},
+	// HuggingFace — Router endpoint that dispatches to many models.
+	// Free tier has a small monthly quota; OpenAI-compatible.
+	"huggingface": {
+		Kind:      "openai",
+		BaseURL:   "https://router.huggingface.co/v1",
+		APIKeyEnv: "HF_TOKEN",
+		ResetTZ:   "UTC",
+	},
+	// Ollama — local. No key needed by default; the api_key_env below is
+	// OPTIONAL: if $OLLAMA_API_KEY is set, airouter will send it as a Bearer
+	// token (useful when Ollama is behind a proxy / Ollama Cloud).
 	"ollama": {
-		Kind:    "ollama",
-		BaseURL: "http://localhost:11434",
-		ResetTZ: "UTC",
+		Kind:      "ollama",
+		BaseURL:   "http://localhost:11434",
+		APIKeyEnv: "OLLAMA_API_KEY", // optional — leave env var unset for local no-auth Ollama
+		ResetTZ:   "UTC",
+	},
+	// ollama-remote — same as ollama but points at a remote URL. Use this when
+	// you self-host Ollama on a different machine and (optionally) put a token
+	// in front of it.
+	"ollama-remote": {
+		Kind:      "ollama",
+		BaseURL:   "",               // must be set with -base-url
+		APIKeyEnv: "OLLAMA_API_KEY", // optional
+		ResetTZ:   "UTC",
 	},
 	"openai": { // or any other OpenAI-compatible URL
 		Kind:      "openai",
@@ -271,11 +294,19 @@ var FreePool = []FreeModel{
 		Notes:      "Free Gemma via OpenRouter — different route from Gemini direct.",
 		VerifiedOn: "2026-11-17"},
 
-	// Cerebras — very tight free trial (5 RPM, 1M tokens/day then it stops).
-	// Source: inference-docs.cerebras.ai/support/rate-limits, Nov 2026.
-	{Preset: "cerebras", Model: "gpt-oss-120b", Category: CategoryText, RPM: 5, RPD: 0, TPM: 30000, Priority: 85, Workers: 1,
-		Notes:      "Free trial only — 5 RPM is tight. Pair with another provider.",
-		VerifiedOn: "2026-11-17"},
+	// Z.AI GLM Flash — free, no daily token cap and no fixed RPM. The only limit is
+	// ONE concurrent request per model (a second one gets HTTP 429, code 1302), so
+	// Workers is 1 and the router queues instead of failing. Source: Z.AI docs as
+	// relayed by the project owner; not re-verified against the live console.
+	{Preset: "zai", Model: "glm-4.7-flash", Category: CategoryText, RPM: 0, RPD: 0, TPM: 0, Priority: 55, Workers: 1,
+		Notes:      "Free. 1 concurrent request. 200K context, 128K output. Reasoning model.",
+		VerifiedOn: "2026-11-20"},
+	{Preset: "zai", Model: "glm-4.5-flash", Category: CategoryText, RPM: 0, RPD: 0, TPM: 0, Priority: 78, Workers: 1,
+		Notes:      "Free. 1 concurrent request. 128K context, 96K output. Z.AI announced its retirement.",
+		VerifiedOn: "2026-11-20"},
+	{Preset: "zai", Model: "glm-4.6v-flash", Category: CategoryText, RPM: 0, RPD: 0, TPM: 0, Priority: 82, Workers: 1,
+		Notes:      "Free. 1 concurrent request. 128K context, 32K output. Multimodal model; airouter sends text only.",
+		VerifiedOn: "2026-11-20"},
 
 	// SambaNova — dev tier has 20 RPM per the community thread.
 	{Preset: "sambanova", Model: "Meta-Llama-3.1-8B-Instruct", Category: CategoryText, RPM: 20, RPD: 0, TPM: 0, Priority: 90, Workers: 2,

@@ -1,5 +1,5 @@
 {
-  "_comment": "Example providers file for `airouter provider import providers.json`. Use the CLI's `bootstrap` command instead if you want the curated free-pool catalog. This file is for hand-curated lists where you want full control over model ids and limits.",
+  "_comment": "Example providers file for `airouter provider import providers.json` (admin) or `airouter me provider import providers.json -key air_...` (tenant self-service). Use `airouter bootstrap` / `airouter me bootstrap` instead if you want the curated free-pool catalog — this file is for hand-curated lists where you want full control over model ids and limits. Every preset known to airouter is shown below — delete the rows you don't need and fill in the keys (either in the api_key field or via the env var named in api_key_env).",
 
   "providers": [
     {
@@ -47,11 +47,159 @@
     },
 
     {
+      "name": "gemini-tts-flash",
+      "kind": "openai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "api_key_env": "GEMINI_API_KEY",
+      "model": "gemini-3.8-flash-tts",
+      "priority": 100,
+      "rpm": 3,
+      "rpd": 10,
+      "workers": 1,
+      "reset_tz": "America/Los_Angeles",
+      "json_mode": false,
+      "system_role": false,
+      "category": "tts"
+    },
+
+    {
+      "name": "openrouter-llama",
+      "kind": "openai",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "meta-llama/llama-3.3-70b-instruct:free",
+      "priority": 75,
+      "rpm": 20,
+      "rpd": 50,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+ 
+
+    {
+      "name": "mistral-large",
+      "kind": "openai",
+      "base_url": "https://api.mistral.ai/v1",
+      "api_key_env": "MISTRAL_API_KEY",
+      "model": "mistral-large-latest",
+      "priority": 90,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "sambanova-llama-8b",
+      "kind": "openai",
+      "base_url": "https://api.sambanova.ai/v1",
+      "api_key_env": "SAMBANOVA_API_KEY",
+      "model": "Meta-Llama-3.1-8B-Instruct",
+      "priority": 90,
+      "rpm": 20,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+  
+
+    {
+      "name": "together-llama-70b",
+      "kind": "openai",
+      "base_url": "https://api.together.ai/v1",
+      "api_key_env": "TOGETHER_API_KEY",
+      "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+      "priority": 50,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "fireworks-llama-v3",
+      "kind": "openai",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "api_key_env": "FIREWORKS_API_KEY",
+      "model": "accounts/fireworks/models/llama-v3p1-70b-instruct",
+      "priority": 55,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "deepinfra-llama-70b",
+      "kind": "openai",
+      "base_url": "https://api.deepinfra.com/v1/openai",
+      "api_key_env": "DEEPINFRA_API_KEY",
+      "model": "meta-llama/Llama-3.3-70B-Instruct",
+      "priority": 60,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "cohere-command-r",
+      "kind": "openai",
+      "base_url": "https://api.cohere.ai/compatibility/v1",
+      "api_key_env": "COHERE_API_KEY",
+      "model": "command-r-08-2024",
+      "priority": 65,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "novita-llama-70b",
+      "kind": "openai",
+      "base_url": "https://api.novita.ai/v3/openai",
+      "api_key_env": "NOVITA_API_KEY",
+      "model": "meta-llama/llama-3.3-70b-instruct",
+      "priority": 70,
+      "workers": 2,
+      "reset_tz": "UTC"
+    },
+
+    {
+      "name": "huggingface-llama",
+      "kind": "openai",
+      "base_url": "https://router.huggingface.co/v1",
+      "api_key_env": "HF_TOKEN",
+      "model": "meta-llama/Llama-3.3-70B-Instruct",
+      "priority": 80,
+      "workers": 1,
+      "reset_tz": "UTC"
+    },
+
+    {
       "name": "ollama-local",
       "kind": "ollama",
       "model": "gemma3:4b",
-      "priority": 90,
-      "workers": 1
+      "priority": 95,
+      "workers": 1,
+      "_comment": "Local Ollama. No key needed by default. If your Ollama is behind an auth proxy or you use Ollama Cloud, set OLLAMA_API_KEY in the environment."
+    },
+
+    {
+      "name": "ollama-remote-auth",
+      "kind": "ollama",
+      "base_url": "https://ollama.example.com",
+      "api_key_env": "OLLAMA_API_KEY",
+      "model": "llama3.1:8b",
+      "priority": 96,
+      "workers": 2,
+      "_comment": "Remote Ollama instance behind a Bearer-token proxy. Set OLLAMA_API_KEY in the environment; airouter sends it as Authorization: Bearer $OLLAMA_API_KEY. Leave api_key_env empty for local no-auth Ollama."
+    },
+
+    {
+      "name": "openai-gpt-4o-mini",
+      "kind": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-4o-mini",
+      "priority": 5,
+      "rpm": 60,
+      "tpm": 1000000,
+      "workers": 2,
+      "reset_tz": "UTC",
+      "_comment": "OpenAI itself (or any other fully-OpenAI-compatible URL). The 'openai' preset is the catch-all for providers that don't have a dedicated preset."
     }
   ]
 }

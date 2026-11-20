@@ -1,4 +1,4 @@
-package main
+package clicmd
 
 import (
 	"context"
@@ -10,23 +10,21 @@ import (
 	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
-// cmdTranscribe implements `airouter transcribe [flags] AUDIO_FILE`.
+// Transcribe implements `transcribe [flags] AUDIO_FILE`. Calls
+// *airouter.Client.Transcribe — audio file → text. Reads the file, sends it
+// to an STT provider (Groq Whisper by default), prints the transcribed text
+// to stdout.
 //
-// Reads the audio file, sends it to an STT provider (Groq Whisper by default),
-// and prints the transcribed text to stdout.
+// Args:
 //
-// Examples:
-//
-//	airouter transcribe recording.mp3
-//	airouter transcribe -language en recording.wav
-//	airouter transcribe -provider groq-whisper-large-v3-turbo recording.mp3
-//	airouter transcribe -prompt " Interview with Dr. Smith" recording.mp3
-//
-// Use -envelope to print the full response (provider, model, language, latency)
-// as JSON on stderr after the text.
-func cmdTranscribe(args []string) error {
+//	["recording.mp3"]                              → default STT provider, auto language
+//	["-language", "en", "recording.wav"]           → language hint
+//	["-provider", "groq-whisper-large-v3-turbo", "recording.mp3"]  → pin STT provider
+//	["-prompt", " Interview with Dr. Smith", "recording.mp3"]       → spelling/style hint
+//	["-envelope"]                                  → full response as JSON on stderr
+func Transcribe(args []string) error {
 	fs := flag.NewFlagSet("transcribe", flag.ExitOnError)
-	db := dbFlag(fs)
+	db := DbFlag(fs)
 	tenant := fs.String("tenant", types.DefaultTenantID, "tenant id")
 	language := fs.String("language", "", "optional ISO-639-1 language hint (e.g. 'en', 'ar')")
 	prompt := fs.String("prompt", "", "optional style/spelling prompt (max 224 tokens)")
@@ -35,7 +33,7 @@ func cmdTranscribe(args []string) error {
 	_ = fs.Parse(args)
 
 	if fs.NArg() == 0 {
-		return fmt.Errorf("give an audio file path as an argument (e.g. `airouter transcribe recording.mp3`)")
+		return fmt.Errorf("give an audio file path as an argument (e.g. `transcribe recording.mp3`)")
 	}
 	path := fs.Arg(0)
 	audio, err := os.ReadFile(path)
@@ -43,7 +41,7 @@ func cmdTranscribe(args []string) error {
 		return fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	r, err := openRouter(*db)
+	r, err := OpenRouter(*db)
 	if err != nil {
 		return err
 	}

@@ -115,3 +115,24 @@ func TestDefinitionsContainsAllPresetsReferencedByFreePool(t *testing.T) {
 		}
 	}
 }
+
+func TestZaiFlashModelsAreSingleConcurrency(t *testing.T) {
+	n := 0
+	for _, m := range FreePool {
+		if m.Preset == "zai" {
+			n++
+			if m.Workers != 1 || m.RPM != 0 || m.RPD != 0 {
+				t.Errorf("%s: want workers=1 and no RPM/RPD caps, got %+v", m.Model, m)
+			}
+		}
+		if m.Preset == "cerebras" || m.Preset == "cohere" {
+			t.Errorf("%s was removed from the catalog", m.Preset)
+		}
+	}
+	if n != 3 {
+		t.Fatalf("want 3 zai models, got %d", n)
+	}
+	if _, ok := Definitions["zai"]; !ok {
+		t.Fatal("zai preset missing")
+	}
+}

@@ -76,6 +76,7 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 	mux.HandleFunc("POST /v1/transcribe", srv.transcribe)
 	mux.HandleFunc("GET /v1/usage", srv.usage)
 	mux.HandleFunc("GET /v1/whoami", srv.whoami)
+	srv.registerMe(mux) // tenant self-service: own models, keys, limits
 
 	// OpenAI-compatible surface: point any OpenAI SDK / editor plugin at
 	// http://HOST/v1 with an airouter key and it just works.

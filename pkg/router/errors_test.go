@@ -255,3 +255,24 @@ func TestGeminiQuotaIdDecidesDailyVersusMinute(t *testing.T) {
 		t.Fatalf("PerMinute quota with retryDelay 7s should be over after 8s, state=%q", s)
 	}
 }
+
+// Z.AI's free models allow one request at a time; a second gets 429 code 1302.
+// That is a short wait for the slot, not a daily limit.
+func TestZaiConcurrencyErrorIsShortCooldown(t *testing.T) {
+	z, _ := fakeProvider(t, status(429, nil, `{"error":{"code":"1302","message":"Rate limit reached for requests"}}`))
+	good, _ := fakeProvider(t, alwaysOK("ok"))
+	clk := &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+	r := newRouter(t, clk)
+	add(t, r, "z", z.URL, 1, 0, nil)
+	add(t, r, "good", good.URL, 2, 0, nil)
+	if resp, err := gen(r, types.Request{}); err != nil || resp.Provider != "good" {
+		t.Fatalf("%v %v", resp, err)
+	}
+	if s := stateOf(r, "z"); s != "cooling down" {
+		t.Fatalf("1302 should cool down briefly, state=%q", s)
+	}
+	clk.t = clk.t.Add(3 * time.Second)
+	if s := stateOf(r, "z"); s != "ok" {
+		t.Fatalf("after 3s the slot should be retried, state=%q", s)
+	}
+}

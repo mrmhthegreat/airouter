@@ -29,7 +29,8 @@ type Store interface {
 	TenantByID(ctx context.Context, id string) (*types.Tenant, error) // nil, nil when missing
 	TenantByKeyHash(ctx context.Context, hash string) (*types.Tenant, error)
 	ListTenants(ctx context.Context) ([]types.Tenant, error)
-	UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error // rotate: old key stops working; types.ErrNotFound if no such tenant
+	UpdateTenantProfile(ctx context.Context, id, name, tz string) error // self-service: only name and timezone
+	UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error  // rotate: old key stops working; types.ErrNotFound if no such tenant
 
 	// Providers -----------------------------------------------------------
 	SaveProvider(ctx context.Context, p *types.ProviderConfig) error // insert (ID==0) or update; sets p.ID
@@ -116,6 +117,18 @@ func (m *MemoryStore) CreateTenant(_ context.Context, t types.Tenant, keyHash st
 		t.CreatedAt = time.Now().UTC()
 	}
 	m.tenants[t.ID], m.hashes[keyHash] = t, t.ID
+	return nil
+}
+
+func (m *MemoryStore) UpdateTenantProfile(_ context.Context, id, name, tz string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tenants[id]
+	if !ok {
+		return types.ErrNotFound
+	}
+	t.Name, t.TZ = name, tz
+	m.tenants[id] = t
 	return nil
 }
 

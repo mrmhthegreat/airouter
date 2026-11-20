@@ -127,6 +127,17 @@ func (s *SQLStore) CreateTenant(ctx context.Context, t types.Tenant, keyHash str
 	return err
 }
 
+func (s *SQLStore) UpdateTenantProfile(ctx context.Context, id, name, tz string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE tenants SET name=?, tz=? WHERE id=?`, name, tz, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLStore) UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE tenants SET api_key_hash=? WHERE id=?`, keyHash, id)
 	if err != nil {

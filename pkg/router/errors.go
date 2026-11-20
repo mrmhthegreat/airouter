@@ -199,6 +199,9 @@ func (r *Router) classify(ctx context.Context, c *candidate, err error) failure 
 		if ra == 0 {
 			ra = retryDelayFromBody(he.Body)
 		}
+		if ra == 0 && strings.Contains(low, "1302") {
+			ra = 2 * time.Second // Z.AI: "concurrency limit", the single slot frees as soon as the running call ends
+		}
 		ri, _ := parseRateHeaders(he.Header, now, cfg.BaseURL)
 		headerDaily := ri.RemainingRequests == 0 && (ri.ResetRequests > maxCooldown || ri.RequestsWindow == "day" && ri.ResetRequests > 0)
 		gDaily, gRetry, gOK := quotaDetail(he.Body)

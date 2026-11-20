@@ -1,7 +1,7 @@
 # airouter
 
 > One Go binary + library that routes your prompt across many free-tier AI
-> providers (Groq, Gemini, Gemma, OpenRouter, Cerebras, Mistral, SambaNova,
+> providers (Groq, Gemini, Gemma, OpenRouter, Z.AI GLM, Mistral, SambaNova,
 > Ollama, any OpenAI-compatible URL) and **auto-switches when one hits its
 > limit**. Supports **text chat**, **text-to-speech (TTS)**, and
 > **speech-to-text (STT)** — same failover behaviour for all three.
@@ -56,7 +56,7 @@ echo "long text..." | ./bin/airouter ask -envelope # full Response JSON
 ```
 
 The `bootstrap` command imports every entry from the curated free-pool catalog
-whose env var is set. Entries without a key (Cerebras, OpenRouter, etc.) are
+whose env var is set. Entries without a key (Z.AI, OpenRouter, etc.) are
 skipped with a clear message — set their env vars and re-run.
 
 ## Output format
@@ -107,7 +107,9 @@ text      gemma       gemma-4-31b-it                 30   14400  16000   65    2
 text      gemma       gemma-4-26b-it                 30   14400  16000   70    2026-11-16  Smaller Gemma 4.
 text      openrouter  meta-llama/llama-3.3-70b:free  20   50     —       75    2026-11-16  RPD rises to 1000 after any payment to OpenRouter.
 text      openrouter  google/gemma-3-27b-it:free     20   50     —       80    2026-11-16  Free Gemma via OpenRouter.
-text      cerebras    gpt-oss-120b                   5    —      30000   85    2026-11-16  Free trial only — 5 RPM.
+text      zai         glm-4.7-flash                  —    —      —       55    2026-11-20  Free. 1 concurrent request, no token cap.
+text      zai         glm-4.5-flash                  —    —      —       78    2026-11-20  Free. Z.AI announced retirement.
+text      zai         glm-4.6v-flash                 —    —      —       82    2026-11-20  Free. Multimodal model, used for text.
 text      sambanova   Meta-Llama-3.1-8B-Instruct     20   —      —       90    2026-11-16  0 = unknown — airouter will discover from 429s.
 text      ollama      gemma3:4b                      —    —      —       95    2026-11-16  Local fallback. Requires `ollama serve`.
 ```
@@ -347,6 +349,85 @@ Admin endpoints (`Authorization: Bearer <admin token>`):
 
 Public endpoints: `GET /` (UI), `GET /healthz`, `GET /v1/presets`, `GET /v1/presets/free-pool`.
 
+## Every user manages their own models, keys and limits
+
+Each tenant (user/app) can choose its own models, paste its own API key and set
+its own limits. Their models are private (nobody else sees or uses them) and
+are tried **before** the shared pool the operator configured. Three ways, all
+scoped to one tenant id:
+
+**Web UI** — sign in with your tenant key, open **My models**: pick a provider
+from the list, paste your key, tick models (limits are pre-filled from the
+catalog), or choose models installed on the server's **Ollama**, or import a
+**JSON file**. Per model: Limits, Change key, Retry now, Turn off, Remove.
+The operator (admin token) can pick any tenant at the top of that tab.
+
+**HTTP** (`Authorization: Bearer <tenant key>`; an admin may add `X-Tenant-ID: acme`):
+
+```bash
+GET    /v1/me/catalog                  # providers + models you can pick, marks what you already added
+POST   /v1/me/catalog/add              {"preset":"groq","api_key":"gsk_...","models":["openai/gpt-oss-20b"]}
+GET    /v1/me/ollama                   # models installed on the server's Ollama
+POST   /v1/me/ollama/add               {"models":["gemma3:4b"]}
+POST   /v1/me/providers                {"preset":"gemini","model":"gemini-2.5-flash","api_key":"...","rpm":10}
+GET    /v1/me/providers                # your models + live status (+ read-only list of shared ones)
+POST   /v1/me/providers/{id}/limits    {"rpm":30,"rpd":1000,"tpm":6000,"workers":2,"priority":10}
+POST   /v1/me/providers/{id}/key       {"api_key":"..."}
+POST   /v1/me/providers/{id}/enable|disable|reset
+DELETE /v1/me/providers/{id}
+GET    /v1/me                          who am I;  PATCH /v1/me {"name","tz"}   (quota is operator-only)
+POST   /v1/me/rotate-key               new key, old one stops working
+GET    /v1/me/usage                    my usage + model status
+POST   /v1/me/bootstrap                {"keys":{"GROQ_API_KEY":"..."}}  add the free-pool models with MY keys
+POST   /v1/me/import                   {"providers":[ ... ]}      # a JSON file
+GET    /v1/me/export                   # your models as importable JSON (no keys)
+```
+
+**CLI for a user, over HTTP** (needs only the server URL and your own key, so it works from any machine; set `AIROUTER_URL` and `AIROUTER_KEY`):
+
+```bash
+airouter me catalog                                     # what you can pick
+echo "$GROQ_API_KEY" | airouter me pick -preset groq -key-stdin openai/gpt-oss-20b openai/gpt-oss-120b
+airouter me add -preset gemini -model gemini-2.5-flash -key-stdin -rpm 10
+airouter me list
+airouter me limits 7 -rpm 20 -rpd 500
+airouter me ollama           # installed on the server;  `me ollama add gemma3:4b` to use one
+airouter me import my-models.json     |   airouter me export
+airouter me usage     |    airouter me update -name Alice -tz Asia/Karachi    |    airouter me rotate-key
+```
+
+**CLI for the operator** (run on the server; on the server; `-tenant` limits every command to that user's models):
+
+```bash
+airouter bootstrap -tenant acme                       # free-pool models, keys taken from env and stored for acme
+airouter provider add -tenant acme -preset groq -model openai/gpt-oss-20b -key-stdin
+airouter provider list -tenant acme
+airouter provider limits 7 -tenant acme -rpm 20 -rpd 500
+airouter provider set-key 7 -tenant acme
+airouter provider import -tenant acme my-models.json
+airouter ollama list                                  # what is installed
+airouter ollama add -tenant acme gemma3:4b
+```
+
+JSON file format (`preset` + `model` + your own `api_key`):
+
+```json
+{"providers": [
+  {"preset": "groq",   "model": "openai/gpt-oss-20b",  "api_key": "gsk_...", "rpm": 30, "rpd": 1000},
+  {"preset": "gemini", "model": "gemini-2.5-flash",    "api_key": "AIza...", "rpm": 10},
+  {"preset": "ollama", "model": "gemma3:4b"}
+]}
+```
+
+Because tenants are not admins, the server enforces: a tenant only ever sees or
+changes **its own** models (anything else answers 404); tenants **cannot use
+env-var keys** (`api_key_env` is rejected, so they cannot spend the server's
+keys); the upstream URL comes from the preset, so a tenant **cannot aim the
+server at arbitrary hosts** (turn that on only if you trust all tenants:
+`serve -allow-tenant-urls`); workers are capped at 8 and models per tenant at
+100 (`-max-tenant-models`); `-block-tenant-ollama` keeps your Ollama private.
+Their provider keys are encrypted at rest like everything else.
+
 ## Keys and secrets: what is stored how
 
 | Secret | Storage | Why |
@@ -380,7 +461,7 @@ Partly, and airouter uses whatever they send:
   body contains a `retryDelay` (e.g. `"34s"`) and a quota name containing
   `PerDay`; airouter uses both. Free-tier numbers still come from the catalog
   (`rpm`/`rpd`), so keep them correct.
-- **Others** (Cerebras, Mistral, OpenRouter, ...) use the same
+- **Others** (Mistral, OpenRouter, ...) use the same
   `x-ratelimit-*` header family or `Retry-After`; airouter parses these
   best-effort. Header formats differ per provider and change over time, so
   treat provider-reported numbers as a bonus, not the source of truth.
@@ -467,6 +548,21 @@ tried at most once per request. If everything is only briefly limited,
 returns `503` with `Retry-After`. A single call is bounded by
 `AttemptTimeout` (60s) and the whole request by `RequestTimeout` (2 min).
 
+## Docker
+
+```bash
+docker build -t airouter .
+docker run -p 8080:8080 -v $(pwd)/data:/data -e AIROUTER_SECRET=$(openssl rand -hex 32) airouter
+```
+
+## Which providers are in the catalog
+
+Only providers you can try **without a payment card**: Groq, Gemini and Gemma (Google AI Studio),
+OpenRouter `:free` models, Z.AI GLM Flash, SambaNova, HuggingFace, and local Ollama.
+Providers that need a card or prepaid balance before they work (DeepSeek, Together, Fireworks,
+DeepInfra, Novita) are not presets, and Cerebras and Cohere were removed. You can still add one yourself as a custom provider if you
+run the server with `-allow-tenant-urls`, or as the operator.
+
 ## Project layout
 
 ```
@@ -478,11 +574,12 @@ pkg/preset/           built-in provider catalog + curated free-pool model list
 pkg/router/           core router: provider selection, failover, error classification
 pkg/server/           HTTP handler: native + OpenAI-compatible API, embedded web UI (web/index.html)
 pkg/sqlopen/          opens SQLite (cgo or pure Go) with encrypted provider keys
-examples/             runnable usage examples (shell + Go)
+examples/             runnable examples: shell, Go, Python (chat, speak, transcribe, manage), JavaScript
+Dockerfile, .github/  container image and CI (tests on both SQLite drivers, cross-compiled releases)
 ```
 
 Module path is `github.com/mrmhthegreat/airouter`. Publishing under another
-GitHub name? Run `make rename MODULE=github.com/mrmhthegreat/airouter` once.
+GitHub name? Run `make rename MODULE=github.com/yourname/airouter` once.
 
 ## Limits and honest notes
 

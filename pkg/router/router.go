@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -34,9 +35,14 @@ type Options struct {
 	// (default 2m). It returns types.ErrTimeout when exceeded.
 	RequestTimeout time.Duration
 	HTTPClient     *http.Client
-	Now            func() time.Time // injectable clock (tests)
-	RefreshEvery   time.Duration    // how often provider configs are re-read from the Store (default 5s)
-	Logf           func(format string, args ...any)
+	// TenantPolicy limits what tenants may configure for themselves.
+	TenantPolicy TenantPolicy
+	// OllamaURL is the Ollama server tenants may pick local models from
+	// (default $OLLAMA_HOST, else http://localhost:11434).
+	OllamaURL    string
+	Now          func() time.Time // injectable clock (tests)
+	RefreshEvery time.Duration    // how often provider configs are re-read from the Store (default 5s)
+	Logf         func(format string, args ...any)
 }
 
 // candidate is one provider config paired with its live in-memory state.
@@ -53,6 +59,8 @@ type Router struct {
 	strategy                       string
 	maxWait                        time.Duration
 	attemptTimeout, requestTimeout time.Duration
+	tpolicy                        TenantPolicy
+	ollamaURL                      string
 	client                         *http.Client
 	now                            func() time.Time
 	refresh                        time.Duration
@@ -79,6 +87,8 @@ func New(o Options) (*Router, error) {
 		client:         o.HTTPClient,
 		now:            o.Now,
 		refresh:        o.RefreshEvery,
+		tpolicy:        o.TenantPolicy,
+		ollamaURL:      o.OllamaURL,
 		logf:           o.Logf,
 		states:         map[int64]*providerState{},
 	}
@@ -87,6 +97,18 @@ func New(o Options) (*Router, error) {
 	}
 	if r.maxWait == 0 {
 		r.maxWait = 20 * time.Second
+	}
+	if r.tpolicy.MaxProviders == 0 {
+		r.tpolicy.MaxProviders = 100
+	}
+	if r.ollamaURL == "" {
+		r.ollamaURL = os.Getenv("OLLAMA_HOST")
+	}
+	if r.ollamaURL == "" {
+		r.ollamaURL = preset.Definitions["ollama"].BaseURL
+	}
+	if !strings.Contains(r.ollamaURL, "://") {
+		r.ollamaURL = "http://" + r.ollamaURL
 	}
 	if r.attemptTimeout == 0 {
 		r.attemptTimeout = 60 * time.Second

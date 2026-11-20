@@ -302,7 +302,7 @@ func TestDailyPausePersistsAcrossProcessesAndCanBeCleared(t *testing.T) {
 func TestBootstrapImportsFreePool(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "fake-key-for-test")
 	t.Setenv("GEMINI_API_KEY", "fake-key-for-test")
-	// Cerebras, SambaNova, OpenRouter, Mistral, OpenAI all unset → must be skipped.
+	// Z.AI, SambaNova, OpenRouter, Mistral, OpenAI all unset → must be skipped.
 	st := store.NewMemoryStore()
 	r, err := New(Options{Store: st, MaxWait: 50 * time.Millisecond})
 	if err != nil {
@@ -320,12 +320,12 @@ func TestBootstrapImportsFreePool(t *testing.T) {
 	//   Gemma (2): gemma-4-31b-it, gemma-4-26b-it
 	//   Ollama (1): gemma3:4b
 	//   = 14 added
-	// Skipped for missing env: cerebras, sambanova, 2 openrouter = 4
+	// Skipped for missing env: 3 zai, sambanova, 2 openrouter = 6
 	if len(added) != 14 {
 		t.Fatalf("added %d providers, want 14:\n  %s", len(added), strings.Join(added, "\n  "))
 	}
-	if len(skipped) != 4 {
-		t.Fatalf("skipped %d, want 4:\n  %s", len(skipped), strings.Join(skipped, "\n  "))
+	if len(skipped) != 6 {
+		t.Fatalf("skipped %d, want 6:\n  %s", len(skipped), strings.Join(skipped, "\n  "))
 	}
 	// The added Groq provider should have the catalog's RPM/RPD/TPM baked in.
 	ps, _ := st.ListProviders(context.Background())

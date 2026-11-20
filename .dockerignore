@@ -1,0 +1,33 @@
+# Build artifacts
+bin/
+dist/
+*.exe
+*.db
+*.db-wal
+*.db-shm
+*.key
+.airouter-key
+
+# Editor / OS junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python / Node example artifacts
+__pycache__/
+*.pyc
+node_modules/
+*.wav
+*.mp3
+
+# Git
+.git/
+.gitignore
+
+# Docs that don't need to ship in the image
+CODE_OF_CONDUCT.md
+LICENSE
+README.md
+examples/

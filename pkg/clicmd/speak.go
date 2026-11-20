@@ -1,4 +1,4 @@
-package main
+package clicmd
 
 import (
 	"context"
@@ -10,20 +10,19 @@ import (
 	"github.com/mrmhthegreat/airouter/pkg/types"
 )
 
-// cmdSpeak implements `airouter speak [flags] TEXT`.
+// Speak implements `speak [flags] TEXT`. Calls *airouter.Client.Speak —
+// text → audio bytes (WAV by default). Outputs the audio bytes to stdout by
+// default; use -o to write to a file instead.
 //
-// Outputs the audio bytes to stdout by default (binary). Use -o to write to a
-// file instead, which is usually what you want because most terminals can't
-// play raw WAV bytes from stdout.
+// Args:
 //
-// Examples:
-//
-//	airouter speak -o hello.wav "Hello world"
-//	airouter speak -voice Kore -provider gemini-tts-gemini-3.8-flash-tts "Hello"
-//	airouter speak -o arabic.wav -voice hassan "مرحبا بالعالم"
-func cmdSpeak(args []string) error {
+//	["-o", "hello.wav", "Hello world"]                 → save WAV to file
+//	["-voice", "Kore", "-provider", "gemini-...", "Hello"]  → pin TTS provider + voice
+//	["-format", "mp3", "..."]                          → mp3 instead of wav
+//	["-language", "ar", "مرحبا بالعالم"]               → language hint
+func Speak(args []string) error {
 	fs := flag.NewFlagSet("speak", flag.ExitOnError)
-	db := dbFlag(fs)
+	db := DbFlag(fs)
 	tenant := fs.String("tenant", types.DefaultTenantID, "tenant id")
 	voice := fs.String("voice", "", "voice id (default: Kore for Gemini, tara for Groq Orpheus English)")
 	format := fs.String("format", "wav", "audio format: wav (default), mp3, pcm")
@@ -33,12 +32,12 @@ func cmdSpeak(args []string) error {
 	envelope := fs.Bool("envelope", false, "print the response metadata (provider, model, voice, latency) on stderr after the audio")
 	_ = fs.Parse(args)
 
-	text := joinSpace(fs.Args())
+	text := JoinSpace(fs.Args())
 	if text == "" {
 		return fmt.Errorf("no text given (pass it as an argument)")
 	}
 
-	r, err := openRouter(*db)
+	r, err := OpenRouter(*db)
 	if err != nil {
 		return err
 	}
@@ -62,8 +61,6 @@ func cmdSpeak(args []string) error {
 			return err
 		}
 	} else {
-		// Write audio bytes to stdout. If stdout is a terminal, warn first so
-		// the user does not get binary garbage in their shell.
 		if stdoutIsTerminal() {
 			fmt.Fprintln(os.Stderr, "warning: writing binary audio to stdout. Use -o FILE to save to a file instead.")
 		}
@@ -77,18 +74,4 @@ func cmdSpeak(args []string) error {
 			resp.Provider, resp.Model, resp.Voice, resp.ContentType, len(resp.Audio), resp.LatencyMS)
 	}
 	return nil
-}
-
-// joinSpace is a local helper to avoid importing strings just for one call.
-// (helpers.go already imports strings; this is duplicated to keep this file
-// standalone for readers.)
-func joinSpace(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " "
-		}
-		out += p
-	}
-	return out
 }

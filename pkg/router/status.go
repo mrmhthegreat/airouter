@@ -13,6 +13,8 @@ type ProviderStatus struct {
 	ID            int64  `json:"id"`
 	Name          string `json:"name"`
 	TenantID      string `json:"tenant_id,omitempty"`
+	BaseURL       string `json:"base_url,omitempty"`
+	Workers       int    `json:"workers"`
 	Kind          string `json:"kind"`
 	Model         string `json:"model"`
 	Preset        string `json:"preset,omitempty"`
@@ -55,7 +57,7 @@ func (r *Router) Status(ctx context.Context, tenantID string) []ProviderStatus {
 		st.mu.Lock()
 		r.hydrate(ctx, cfg, st, now)
 		s := ProviderStatus{
-			ID: cfg.ID, Name: cfg.Name, TenantID: cfg.TenantID, Kind: cfg.Kind, Model: cfg.Model,
+			ID: cfg.ID, Name: cfg.Name, TenantID: cfg.TenantID, BaseURL: cfg.BaseURL, Workers: cfg.Workers, Kind: cfg.Kind, Model: cfg.Model,
 			Preset: cfg.Preset, Category: cfg.Category, Priority: cfg.Priority,
 			UsedToday:     st.requestsToday,
 			TokensToday:   st.tokensToday,
