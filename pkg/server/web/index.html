@@ -288,9 +288,10 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add("hidden"), 2600); }
+const BASE = window.location.pathname.replace(/\/+$/, "");
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}), ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+  const res = await fetch(BASE + path, { ...opts, headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}), ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
   let data = null; const text = await res.text();
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
   if (!res.ok) {
@@ -574,7 +575,7 @@ $("jsonImport").onclick = async () => {
 };
 $("jsonExport").onclick = async () => {
   try {
-    const res = await fetch("/v1/me/export", { headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}) } });
+    const res = await fetch(BASE +"/v1/me/export", { headers: { Authorization: "Bearer " + KEY, ...(ROLE === "admin" && ACT_AS ? { "X-Tenant-ID": ACT_AS } : {}) } });
     const url = URL.createObjectURL(await res.blob()); const a = h("a", { href: url, download: "airouter-models.json" }); document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   } catch (e) { toast(explain(e)); }
 };
