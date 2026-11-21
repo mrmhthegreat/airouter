@@ -40,7 +40,7 @@ jobs:
         # the release binaries use). Both must pass.
         cgo: ['1', '0']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -108,7 +108,7 @@ jobs:
           - { goos: windows, goarch: amd64, archive: zip     }
           - { goos: windows, goarch: arm64, archive: zip     }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -197,7 +197,7 @@ jobs:
     needs: test
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Read the Go version from go.mod so the Docker image uses the same
       # version the rest of CI uses. Otherwise the Dockerfile's default
@@ -249,7 +249,7 @@ jobs:
     permissions:
       contents: write  # needed to attach files to a GitHub Release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

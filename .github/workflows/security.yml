@@ -54,7 +54,7 @@ jobs:
       security-events: write   # so it can upload findings to the Security tab
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -103,7 +103,7 @@ jobs:
       security-events: write   # upload SARIF
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -164,7 +164,7 @@ jobs:
         # scripts you want scanned too.
         language: ['go']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
