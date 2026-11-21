@@ -280,7 +280,7 @@ var FreePool = []FreeModel{
 	{Preset: "gemma", Model: "gemma-4-31b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 65, Workers: 2,
 		Notes:      "Gemma 4 31B via Gemini API. No system role, no response_format — airouter handles both.",
 		VerifiedOn: "2026-11-17"},
-	{Preset: "gemma", Model: "gemma-4-26b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 70, Workers: 2,
+	{Preset: "gemma", Model: "gemma-4-26b-a4b-it", Category: CategoryText, RPM: 30, RPD: 14400, TPM: 16000, Priority: 70, Workers: 2,
 		Notes:      "Smaller Gemma 4. Same Gemini-API quirks as 31B.",
 		VerifiedOn: "2026-11-17"},
 
