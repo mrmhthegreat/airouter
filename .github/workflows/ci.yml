@@ -179,8 +179,12 @@ jobs:
           echo "extracting $f"
           tar -xzf "$f"
           bin="${f%.tar.gz}"
-          ./"$bin" -v
+          # `-h` prints the usage text and exits 0. Don't use `-v` — the CLI
+          # doesn't have a version flag (it's a subcommand dispatcher, not a
+          # flag-based tool). `presets` is a real subcommand that exits 0
+          # and produces output we can sanity-check.
           ./"$bin" -h | head -3
+          ./"$bin" presets | head -3
           # Re-pack (we extracted it just for the smoke test).
           rm -f "$bin"
 
@@ -229,16 +233,34 @@ jobs:
 
       - name: Smoke test the image
         run: |
-          # The image should start, expose :8080, and respond to /healthz.
-          docker run --rm -d -p 18080:8080 --name airouter-ci airouter:ci
-          sleep 3
-          curl -sf http://localhost:18080/healthz | grep -q '"status":"ok"' || {
-            echo "healthz failed"
-            docker logs airouter-ci
-            exit 1
-          }
-          docker stop airouter-ci || true
-          echo "Docker image smoke test passed"
+          # Start the container WITHOUT --rm so that if it crashes we can
+          # still grab its logs. The trap at the end cleans up.
+          trap 'docker rm -f airouter-ci 2>/dev/null || true' EXIT
+          docker run -d -p 18080:8080 --name airouter-ci airouter:ci
+
+          # Wait up to 10 seconds for the server to be ready. `sleep 3` was
+          # too short on cold runners — the container was still starting when
+          # curl hit it, and then the container crashed for other reasons and
+          # we couldn't see logs because --rm had already removed it.
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:18080/healthz >/dev/null 2>&1; then
+              echo "healthz OK after ${i}s"
+              docker stop airouter-ci || true
+              echo "Docker image smoke test passed"
+              exit 0
+            fi
+            # Check if the container is still running — if it died, grab logs.
+            if ! docker ps --format '{{.Names}}' | grep -q '^airouter-ci$'; then
+              echo "container exited early — logs:"
+              docker logs airouter-ci
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "healthz failed (timed out after 10s) — container logs:"
+          docker logs airouter-ci
+          exit 1
 
   # ---- release: attach binaries to a GitHub Release (on tag push) -------
   release:

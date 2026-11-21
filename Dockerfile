@@ -51,9 +51,15 @@ RUN apk add --no-cache ca-certificates tzdata && \
 # DB, provider keys (encrypted) and tenant key hashes persist across restarts.
 # The .key file next to it holds the AES-256 secret — back it up OUT of the
 # volume (or set AIROUTER_SECRET explicitly).
+#
+# Create /data and chown it to the airouter user BEFORE the USER switch below.
+# Without this, /data is owned by root (created by WORKDIR) and the airouter
+# user can't write airouter.db there → the server crashes on startup.
 ENV AIROUTER_DB=/data/airouter.db
 ENV AIROUTER_CORS=""
 ENV AIROUTER_ADMIN_TOKEN=""
+
+RUN mkdir -p /data && chown -R airouter:airouter /data
 
 WORKDIR /data
 VOLUME ["/data"]

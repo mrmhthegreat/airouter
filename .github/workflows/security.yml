@@ -120,13 +120,28 @@ jobs:
       # -severity medium: report medium + high (low is usually noise).
       # -exclude-dir=testdata: don't scan test fixtures.
       # -confidence medium: same idea — drop the lowest-confidence findings.
+      # -exclude G104,G304,G306: these are inherent to a CLI tool that reads
+      #   and writes files based on user-provided paths. They're false
+      #   positives for airouter's use case:
+      #     G104 = unhandled fmt.Fprintf return value (we write to stdout —
+      #            if it fails there's nothing useful to do)
+      #     G304 = file inclusion via variable (every CLI reads files the
+      #            user named on the command line — that's the point)
+      #     G306 = Expect WriteFile permissions to be 0600 or less
+      #            (audio output files are user-visible, 0644 is correct)
+      #   Keep all other rules active — they catch real issues like
+      #   hard-coded credentials, weak crypto, SQL injection, etc.
       - name: Run gosec (text for log, sarif for Security tab)
         env:
           CGO_ENABLED: '0'
         run: |
-          gosec -severity medium -confidence medium -exclude-dir=testdata -fmt=text -out=gosec.txt ./... || true
+          gosec -severity medium -confidence medium -exclude-dir=testdata \
+                -exclude G104,G304,G306 \
+                -fmt=text -out=gosec.txt ./... || true
           cat gosec.txt || true
-          gosec -severity medium -confidence medium -exclude-dir=testdata -fmt=sarif -out=gosec.sarif ./... || true
+          gosec -severity medium -confidence medium -exclude-dir=testdata \
+                -exclude G104,G304,G306 \
+                -fmt=sarif -out=gosec.sarif ./... || true
 
       - name: Upload SARIF
         if: always() && hashFiles('gosec.sarif') != ''
