@@ -278,6 +278,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true  # flatten into dist/ instead of one subdir per artifact
+          # IMPORTANT: only download the cross-compiled binaries. The docker
+          # job also uploads an artifact (named like
+          # "<owner>~<repo>~<id>.dockerbuild") which is build metadata, NOT a
+          # release asset. Without this filter, download-artifact tries to
+          # extract it as a zip and fails after 5 retries.
+          pattern: airouter-*
 
       - name: List downloaded artifacts
         run: |
