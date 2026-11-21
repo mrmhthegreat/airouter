@@ -59,7 +59,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Read the Go version from go.mod so govulncheck uses the same
+          # version the project requires. Otherwise it can't parse newer
+          # stdlib syntax (iterators, etc.) and dies.
+          go-version-file: go.mod
           cache: true
 
       # govulncheck needs CGO off (it scans the module graph + actually
@@ -105,7 +108,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Same — read from go.mod.
+          go-version-file: go.mod
           cache: true
 
       - name: Install gosec
@@ -174,7 +178,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Same — read from go.mod.
+          go-version-file: go.mod
           cache: true
 
       # CodeQL needs the code to be BUILT so it can analyze the actual call

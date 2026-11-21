@@ -4,7 +4,12 @@
 # Build the airouter binary with the pure-Go SQLite driver (modernc.org/sqlite)
 # so the resulting image has zero C dependencies and runs on any Linux.
 # CGO_ENABLED=0 means no C compiler is needed in the build image.
-FROM golang:1.22-alpine AS builder
+#
+# The Go version is a build-arg so you can bump it without editing this file.
+# Default matches the `go X.Y` directive in go.mod — if you bump go.mod, also
+# pass --build-arg GO_VERSION=X.Y to docker build (or update the default here).
+ARG GO_VERSION=1.26
+FROM golang:${GO_VERSION}-alpine AS builder
 
 # git is needed when VERSION is derived from `git describe` (the Makefile
 # falls back to "dev" when git is unavailable, so this is optional).
