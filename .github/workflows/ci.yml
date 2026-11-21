@@ -185,7 +185,7 @@ jobs:
           rm -f "$bin"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: airouter-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
