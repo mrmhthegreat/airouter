@@ -1,0 +1,190 @@
+# GitHub Actions workflow for security scanning of airouter.
+#
+# Runs on every push to main/master, on every PR, and once a week on Sunday
+# (catches newly-disclosed CVEs in dependencies even when nothing was pushed).
+#
+# Three scanners, each in its own job so a failure in one doesn't hide the
+# others:
+#
+#   govulncheck   — official Go vulnerability scanner (golang.org/x/vuln).
+#                   Checks the module graph + the code that's actually
+#                   imported against the Go vulnerability database
+#                   (https://vuln.go.dev). Fast, zero false positives on
+#                   unreachable code.
+#
+#   gosec         — static security analyzer for Go code. Catches common
+#                   mistakes: hard-coded credentials, weak crypto, SQL
+#                   injection, path traversal, insecure random, etc.
+#
+#   codeql        — GitHub's semantic code analysis. Catches deeper logic
+#                   bugs (taint flows from user input to dangerous sinks).
+#                   Results show up in the repo's "Security" tab under
+#                   "Code scanning alerts".
+#
+# All three upload their findings to the GitHub Security tab. A failure in
+# govulncheck or gosec fails the workflow (so PRs with new vulns are blocked
+# from merge if branch protection requires this check). CodeQL is also
+# surfaced as a code-scanning alert, but does not fail the workflow by
+# default — configure the repo's protection rules to require it.
+
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly Sunday scan at 03:00 UTC — catches newly-disclosed CVEs in
+    # dependencies even if no code was pushed.
+    - cron: '0 3 * * 0'
+  workflow_dispatch: {}  # manual trigger from the Actions tab
+
+# Cancel in-progress runs on the same ref when a new commit is pushed.
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── govulncheck: official Go vulnerability database ────────────────────
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-22.04
+    permissions:
+      security-events: write   # so it can upload findings to the Security tab
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      # govulncheck needs CGO off (it scans the module graph + actually
+      # imported packages; the pure-Go SQLite driver is fine for that).
+      - name: Install govulncheck
+        env:
+          CGO_ENABLED: '0'
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        env:
+          CGO_ENABLED: '0'
+        # -show verbose includes the call stacks where the vulnerable
+        # function is actually reachable from our code. -format text is
+        # human-readable; -format json is also available for SARIF upload.
+        run: govulncheck -show verbose ./...
+
+      # Optional: convert to SARIF and upload to the Security tab so the
+      # findings show up alongside gosec and CodeQL alerts.
+      - name: Run govulncheck (SARIF)
+        if: always()
+        env:
+          CGO_ENABLED: '0'
+        run: govulncheck -format sarif -o govulncheck.sarif ./... || true
+
+      - name: Upload SARIF
+        if: always() && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+
+  # ── gosec: static security analyzer for Go ─────────────────────────────
+  gosec:
+    name: gosec
+    runs-on: ubuntu-22.04
+    permissions:
+      security-events: write   # upload SARIF
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Install gosec
+        env:
+          CGO_ENABLED: '0'
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      # -severity medium: report medium + high (low is usually noise).
+      # -exclude-dir=testdata: don't scan test fixtures.
+      # -confidence medium: same idea — drop the lowest-confidence findings.
+      - name: Run gosec (text for log, sarif for Security tab)
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          gosec -severity medium -confidence medium -exclude-dir=testdata -fmt=text -out=gosec.txt ./... || true
+          cat gosec.txt || true
+          gosec -severity medium -confidence medium -exclude-dir=testdata -fmt=sarif -out=gosec.sarif ./... || true
+
+      - name: Upload SARIF
+        if: always() && hashFiles('gosec.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
+      # Fail the job if gosec reported any finding at medium+ severity.
+      # (Remove this step if you want gosec to be informational only.)
+      - name: Check for findings
+        if: always() && hashFiles('gosec.sarif') != ''
+        run: |
+          # results count from the SARIF "runs[0].results" array
+          count=$(jq '.runs[0].results | length' gosec.sarif 2>/dev/null || echo "0")
+          echo "gosec reported $count finding(s) at medium+ severity"
+          if [ "$count" != "0" ] && [ -n "$count" ]; then
+            echo "::error::gosec reported $count finding(s). See the Security tab or gosec.txt."
+            exit 1
+          fi
+
+  # ── CodeQL: GitHub's semantic code analysis ────────────────────────────
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-22.04
+    permissions:
+      security-events: write   # upload CodeQL results
+      actions: read            # needed for CodeQL to read workflow run metadata
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # CodeQL supports multiple language analyzers in one job. airouter is
+        # Go-only today; add 'javascript' or 'python' if you ship example
+        # scripts you want scanned too.
+        language: ['go']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use the 'security-and-quality' query suite — it's the strictest
+          # default and catches everything 'security-extended' does plus
+          # maintainability/quality queries.
+          queries: security-and-quality
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      # CodeQL needs the code to be BUILT so it can analyze the actual call
+      # graph. CGO off — modernc.org/sqlite is pure Go.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        env:
+          CGO_ENABLED: '0'
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{matrix.language}}'

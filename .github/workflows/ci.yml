@@ -62,10 +62,22 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
         run: go build ./...
 
-      - name: go test
+      - name: go test (with race detector)
+        # -race requires CGO_ENABLED=1. Run the race-enabled pass only on the
+        # CGO=1 matrix entry; the CGO=0 entry uses the plain pass below.
+        if: matrix.cgo == '1'
         env:
-          CGO_ENABLED: ${{ matrix.cgo }}
+          CGO_ENABLED: '1'
         run: go test -count=1 -race ./...
+
+      - name: go test (pure-Go, no race detector)
+        # The pure-Go build can't use -race (the race detector itself is CGO).
+        # Still run every test once on this matrix entry to make sure the
+        # modernc.org/sqlite driver path passes too.
+        if: matrix.cgo == '0'
+        env:
+          CGO_ENABLED: '0'
+        run: go test -count=1 ./...
 
       - name: Upload coverage (pure-Go only)
         if: matrix.cgo == '0'
