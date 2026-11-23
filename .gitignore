@@ -1,0 +1,19 @@
+# Build artifacts
+/bin/
+*.exe
+*.test
+*.out
+*.key
+# SQLite databases (state should not be checked in)
+*.db
+*.db-wal
+*.db-shm
+
+# Local env
+.env
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

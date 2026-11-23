@@ -1,0 +1,64 @@
+# Dependabot config for airouter.
+#
+# Tells GitHub to open PRs automatically when:
+#   1. A Go module in go.mod has a security advisory or a new release.
+#   2. A GitHub Action in .github/workflows/ has a new release.
+#
+# Security advisories are always high-priority (Dependabot opens the PR
+# immediately); routine updates are batched to once a week to avoid PR spam.
+#
+# Where to put this file: .github/dependabot.yml  (the path is fixed by GitHub).
+
+version: 2
+
+updates:
+  # ── Go modules ────────────────────────────────────────────────────────────
+  # Monitors go.mod. Opens a PR when a dependency has a security advisory or
+  # a new version is released. Critical for catching CVEs in modernc.org/sqlite,
+  # pgx, go-sql-driver/mysql, etc. before they hit production.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly      # every Monday — security advisories still open immediately
+      day: monday
+      time: '03:00'
+      timezone: UTC
+    open-pull-requests-limit: 5   # don't spam — max 5 open dependency PRs at once
+    labels:
+      - dependencies
+      - go
+    commit-message:
+      prefix: chore(deps)         # conventional-commits style, keeps the log tidy
+      include: scope
+    # Group minor + patch updates into one PR per ecosystem so a single review
+    # can merge them. Major updates still get their own PR (they may need code
+    # changes).
+    groups:
+      go-minor:
+        update-types:
+          - minor
+          - patch
+
+  # ── GitHub Actions versions ─────────────────────────────────────────────
+  # Monitors .github/workflows/*.yml. Opens a PR when an action (checkout,
+  # setup-go, upload-artifact, codeql-action, …) has a new release.
+  # Important for keeping up with security fixes in the CI runner images.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: chore(ci-deps)
+      include: scope
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

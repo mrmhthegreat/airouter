@@ -1,0 +1,302 @@
+# GitHub Actions workflow for airouter.
+#
+# This pipeline:
+#   1. Lints + tests the code on Linux with both SQLite drivers
+#      (CGO mattn and pure-Go modernc) so we catch driver-specific bugs.
+#   2. Cross-compiles release binaries for every supported platform
+#      (linux / macOS / Windows x amd64 / arm64) so a push to main always
+#      produces a shippable artifact set.
+#   3. Builds the Docker image to catch Dockerfile regressions.
+#
+# The whole pipeline runs on every push to main/master and on every PR.
+# Tag pushes (v*) trigger a release: it attaches the cross-compiled archives
+# to the GitHub Release.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs on the same ref when a new commit is pushed — keeps
+# PR feedback fast and saves CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- lint + test (fast; runs first) ----------------------------------
+  test:
+    name: Test (CGO=${{ matrix.cgo }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Run the test suite twice: once with the CGO mattn driver (faster,
+        # production-grade) and once with the pure-Go modernc driver (the one
+        # the release binaries use). Both must pass.
+        cgo: ['1', '0']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the Go version straight from go.mod so this never goes stale.
+          # Whatever `go X.Y.Z` directive is in go.mod is what we install.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install C compiler (CGO only)
+        if: matrix.cgo == '1'
+        run: sudo apt-get update && sudo apt-get install -y gcc
+
+      - name: go vet
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go vet ./...
+
+      - name: go build
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go build ./...
+
+      - name: go test (with race detector)
+        # -race requires CGO_ENABLED=1. Run the race-enabled pass only on the
+        # CGO=1 matrix entry; the CGO=0 entry uses the plain pass below.
+        if: matrix.cgo == '1'
+        env:
+          CGO_ENABLED: '1'
+        run: go test -count=1 -race ./...
+
+      - name: go test (pure-Go, no race detector)
+        # The pure-Go build can't use -race (the race detector itself is CGO).
+        # Still run every test once on this matrix entry to make sure the
+        # modernc.org/sqlite driver path passes too.
+        if: matrix.cgo == '0'
+        env:
+          CGO_ENABLED: '0'
+        run: go test -count=1 ./...
+
+      - name: Upload coverage (pure-Go only)
+        if: matrix.cgo == '0'
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go test -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -5
+
+  # ---- cross-compile release binaries ----------------------------------
+  cross-compile:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every release target. Matches the list in the Makefile's $(TARGETS).
+        # CGO is OFF for cross-compile so we don't need a C cross-compiler per
+        # target — the modernc.org/sqlite pure-Go driver is linked in instead.
+        include:
+          - { goos: linux,   goarch: amd64, archive: tar.gz }
+          - { goos: linux,   goarch: arm64, archive: tar.gz }
+          - { goos: darwin,  goarch: amd64, archive: tar.gz }
+          - { goos: darwin,  goarch: arm64, archive: tar.gz }
+          - { goos: windows, goarch: amd64, archive: zip     }
+          - { goos: windows, goarch: arm64, archive: zip     }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the Go version from go.mod — never goes stale when go.mod is bumped.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Derive version
+        id: version
+        run: |
+          # Mirror the Makefile's VERSION logic: use the git tag if on a tag,
+          # otherwise fall back to the short SHA. Strips the leading 'v' from
+          # tags so the binary file name is airouter-1.2.3-linux-amd64.tar.gz
+          # (not airouter-v1.2.3-...).
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $V"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          # Clean dist/ first — stale files from a previous matrix entry would
+          # confuse the ls in the smoke-test step below.
+          rm -rf dist && mkdir -p dist
+          ext=""
+          [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          out="dist/airouter-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }}" \
+            -o "$out" ./cmd/airouter
+          echo "built $out ($(du -h "$out" | cut -f1))"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd dist
+          f=$(ls airouter-*-${{ matrix.goos }}-${{ matrix.goarch }})
+          tar -czf "$f.tar.gz" "$f"
+          rm -f "$f"
+          echo "archive: $f.tar.gz"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          cd dist
+          f=$(ls airouter-*-${{ matrix.goos }}-${{ matrix.goarch }}.exe)
+          zip -q "$f.zip" "$f"
+          rm -f "$f"
+          echo "archive: $f.zip"
+
+      - name: Verify binary runs (linux/amd64 only)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          # Smoke test: the linux/amd64 binary should actually execute on the
+          # CI runner. We can't run windows/darwin binaries here.
+          # Use the exact filename we built instead of ls — avoids breakage
+          # when dist/ somehow has more than one matching file.
+          cd dist
+          f="airouter-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          echo "extracting $f"
+          tar -xzf "$f"
+          bin="${f%.tar.gz}"
+          # `-h` prints the usage text and exits 0. Don't use `-v` — the CLI
+          # doesn't have a version flag (it's a subcommand dispatcher, not a
+          # flag-based tool). `presets` is a real subcommand that exits 0
+          # and produces output we can sanity-check.
+          ./"$bin" -h | head -3
+          ./"$bin" presets | head -3
+          # Re-pack (we extracted it just for the smoke test).
+          rm -f "$bin"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: airouter-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 14
+
+  # ---- Docker image build ----------------------------------------------
+  docker:
+    name: Docker image
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read the Go version from go.mod so the Docker image uses the same
+      # version the rest of CI uses. Otherwise the Dockerfile's default
+      # (golang:1.26-alpine) might not match a bumped go.mod.
+      - name: Read Go version from go.mod
+        id: gover
+        # extract the second word from the `go X.Y.Z` line
+        run: |
+          v=$(awk '/^go /{print $2; exit}' go.mod)
+          # setup-go wants just major.minor, not the patch
+          v_short=$(echo "$v" | cut -d. -f1,2)
+          echo "version=$v_short" >> "$GITHUB_OUTPUT"
+          echo "resolved Go version for Docker build: $v_short"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: airouter:ci
+          load: true
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            GO_VERSION=${{ steps.gover.outputs.version }}
+
+      - name: Smoke test the image
+        run: |
+          # Start the container WITHOUT --rm so that if it crashes we can
+          # still grab its logs. The trap at the end cleans up.
+          trap 'docker rm -f airouter-ci 2>/dev/null || true' EXIT
+          docker run -d -p 18080:8080 --name airouter-ci airouter:ci
+
+          # Wait up to 10 seconds for the server to be ready. `sleep 3` was
+          # too short on cold runners — the container was still starting when
+          # curl hit it, and then the container crashed for other reasons and
+          # we couldn't see logs because --rm had already removed it.
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:18080/healthz >/dev/null 2>&1; then
+              echo "healthz OK after ${i}s"
+              docker stop airouter-ci || true
+              echo "Docker image smoke test passed"
+              exit 0
+            fi
+            # Check if the container is still running — if it died, grab logs.
+            if ! docker ps --format '{{.Names}}' | grep -q '^airouter-ci$'; then
+              echo "container exited early — logs:"
+              docker logs airouter-ci
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "healthz failed (timed out after 10s) — container logs:"
+          docker logs airouter-ci
+          exit 1
+
+  # ---- release: attach binaries to a GitHub Release (on tag push) -------
+  release:
+    name: Release
+    needs: [test, cross-compile, docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write  # needed to attach files to a GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true  # flatten into dist/ instead of one subdir per artifact
+          # IMPORTANT: only download the cross-compiled binaries. The docker
+          # job also uploads an artifact (named like
+          # "<owner>~<repo>~<id>.dockerbuild") which is build metadata, NOT a
+          # release asset. Without this filter, download-artifact tries to
+          # extract it as a zip and fails after 5 retries.
+          pattern: airouter-*
+
+      - name: List downloaded artifacts
+        run: |
+          ls -lh dist/
+          echo "---"
+          echo "Total size: $(du -sh dist/ | cut -f1)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generate release notes from commits since the last tag.
+          generate_release_notes: true
+          # Attach every file in dist/ as a release asset.
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
