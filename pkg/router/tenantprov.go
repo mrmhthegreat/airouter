@@ -39,6 +39,13 @@ type TenantPolicy struct {
 	MaxProviders int
 	// BlockOllama stops tenants from using the server's Ollama.
 	BlockOllama bool
+	// AllowSharedVoiceClone lets tenants clone voices inside the SHARED
+	// ElevenLabs account. Off by default: a clone uses a paid voice slot of the
+	// operator, so tenants normally clone with their own ElevenLabs key. The
+	// "default" tenant (CLI / embedded use) is always allowed.
+	AllowSharedVoiceClone bool
+	// MaxClonedVoices caps cloned voices per tenant (default 10).
+	MaxClonedVoices int
 }
 
 const maxTenantWorkers = 8
@@ -280,10 +287,11 @@ func (r *Router) DeleteTenantProvider(ctx context.Context, tenantID string, id i
 
 // SharedModel is what a tenant may see about the operator's shared pool.
 type SharedModel struct {
-	Name     string `json:"name"`
-	Model    string `json:"model"`
-	Category string `json:"category"`
-	State    string `json:"state"`
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	Category    string `json:"category"`
+	State       string `json:"state"`
+	ResetsInSec int64  `json:"resets_in_seconds"`
 }
 
 // ListTenantProviders returns the tenant's own models with live status, and a

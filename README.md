@@ -37,6 +37,20 @@ fails over to the next one before your code even notices.
 - **Same shape, three faces:** the CLI, the HTTP server, and the Go library
   all expose the same Request/Response types.
 
+## Documentation
+
+| Doc | What it covers |
+| --- | --- |
+| [docs/API.md](docs/API.md) | Every HTTP endpoint: request body, query params, response shape, status codes |
+| [docs/CLI.md](docs/CLI.md) | Every CLI command and flag, with examples |
+| [docs/openapi.yaml](docs/openapi.yaml) | OpenAPI 3 spec (import into Postman, Insomnia, or generate clients) |
+| [docs/index.html](docs/index.html) / [docs/swagger.html](docs/swagger.html) | Browsable docs site and Swagger UI, ready for GitHub Pages |
+| [docs/ELEVENLABS.md](docs/ELEVENLABS.md) | ElevenLabs voices, per-request voice settings, voice cloning, WhatsApp voice notes, tenant isolation of clones |
+| [docs/EMBEDDING.md](docs/EMBEDDING.md) | Use airouter as a Go library (no HTTP), pool-only caps, several processes on one SQLite file |
+| [docs/HOSTING.md](docs/HOSTING.md) | Publish the docs on GitHub Pages, and host the server (Docker, VPS, Fly.io) |
+
+Live docs (after enabling Pages): https://mrmhthegreat.github.io/airouter/
+
 ## Quick start
 
 ```bash

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>airouter docs</title>
+<meta name="description" content="API, CLI and guide for airouter: route prompts across free AI providers with automatic failover.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔀</text></svg>">
+<style>
+:root{--bg:#fff;--panel:#f6f7f9;--text:#1c2128;--muted:#5d6672;--line:#e2e5ea;--accent:#2563eb;--code:#f1f3f6;--get:#0a7d3c;--post:#1d4ed8;--del:#b42318;--patch:#9a5b00;--warn:#fff7e0}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1318;--panel:#161b22;--text:#e6e9ee;--muted:#9aa4b2;--line:#262d37;--accent:#6ea0ff;--code:#1b222b;--get:#4cc07d;--post:#7aa7ff;--del:#ff8a80;--patch:#f0b44c;--warn:#2a2412}}
+:root[data-theme=dark]{--bg:#0f1318;--panel:#161b22;--text:#e6e9ee;--muted:#9aa4b2;--line:#262d37;--accent:#6ea0ff;--code:#1b222b;--get:#4cc07d;--post:#7aa7ff;--del:#ff8a80;--patch:#f0b44c;--warn:#2a2412}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:10;display:flex;gap:12px;align-items:center;padding:10px 18px;background:var(--bg);border-bottom:1px solid var(--line)}
+header b{font-size:17px}header .sp{flex:1}
+header a,header button{color:var(--text);text-decoration:none;font-size:14px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer}
+#menu{display:none}
+.wrap{display:flex;max-width:1250px;margin:0 auto}
+nav{width:270px;flex:none;position:sticky;top:53px;height:calc(100vh - 53px);overflow:auto;padding:16px;border-right:1px solid var(--line);font-size:14px}
+nav input{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text);margin-bottom:10px}
+nav h4{margin:14px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+nav a{display:flex;gap:6px;align-items:center;padding:3px 6px;color:var(--text);text-decoration:none;border-radius:5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+nav a:hover{background:var(--panel)}
+nav .m{font:600 10px monospace;width:38px;flex:none}
+main{flex:1;min-width:0;padding:24px 28px 80px}
+h1{margin:0 0 6px}h2{margin:42px 0 10px;padding-top:10px;border-top:1px solid var(--line)}h3{margin:0}
+p{margin:8px 0}a{color:var(--accent)}
+code,pre{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+code{background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;margin:8px 0;position:relative}
+pre code{background:none;padding:0}
+.copy{position:absolute;top:6px;right:6px;font-size:11px;padding:2px 8px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--text);cursor:pointer}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px;display:block;overflow-x:auto}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;white-space:nowrap}
+.card{border:1px solid var(--line);border-radius:10px;margin:14px 0;background:var(--bg)}
+.card>summary{list-style:none;cursor:pointer;display:flex;gap:10px;align-items:center;padding:10px 14px;flex-wrap:wrap}
+.card>summary::-webkit-details-marker{display:none}
+.card[open]>summary{border-bottom:1px solid var(--line);background:var(--panel);border-radius:10px 10px 0 0}
+.card .body{padding:4px 16px 14px}
+.badge{font:700 11px monospace;padding:3px 8px;border-radius:5px;color:#fff;min-width:56px;text-align:center}
+.GET{background:var(--get)}.POST{background:var(--post)}.DELETE{background:var(--del)}.PATCH{background:var(--patch)}
+.path{font:600 14px monospace;word-break:break-all}.sum{color:var(--muted);font-size:14px}
+.tag{font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid var(--line);color:var(--muted)}
+.req{color:var(--del);font-size:12px}.opt{color:var(--muted);font-size:12px}
+.note{background:var(--warn);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:10px 0}
+.st{font:600 12px monospace}.s2{color:var(--get)}.s4{color:var(--patch)}.s5{color:var(--del)}
+.cfg{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}.cfg label{font-size:13px;color:var(--muted)}
+.cfg input{display:block;margin-top:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text);min-width:240px;font:13px monospace}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}.grid>div{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel)}
+@media(max-width:860px){#menu{display:inline-block}nav{position:fixed;z-index:9;left:0;top:53px;background:var(--bg);transform:translateX(-100%);transition:.2s;width:280px}nav.open{transform:none}main{padding:18px 14px 60px}}
+</style>
+</head>
+<body>
+<header>
+  <button id="menu" aria-label="Menu">☰</button>
+  <b>🔀 airouter</b><span class="sum">docs</span><span class="sp"></span>
+  <a href="swagger.html">Swagger UI</a>
+  <a href="openapi.yaml" download>openapi.yaml</a>
+  <a href="https://github.com/mrmhthegreat/airouter">GitHub</a>
+  <button id="theme">Theme</button>
+</header>
+<div class="wrap">
+<nav id="nav"><input id="q" placeholder="Search endpoints…" aria-label="Search"><div id="navlinks"></div></nav>
+<main id="main"></main>
+</div>
+<script>
+const SPEC = __SPEC__;
+const CLI = __CLI__;
+const $ = (s, r=document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const md = s => esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/\*([^*]+)\*/g,'<i>$1</i>').replace(/\n\n/g,'<br><br>').replace(/\n- /g,'<br>• ').replace(/\n/g,' ');
+
+const ref = o => { while (o && o.$ref) { o = o.$ref.replace('#/','').split('/').reduce((a,k)=>a[k],SPEC); } return o; };
+const refName = o => o && o.$ref ? o.$ref.split('/').pop() : null;
+
+function typeOf(s) {
+  const r = ref(s); if (!r) return 'any';
+  if (r.oneOf) return r.oneOf.map(typeOf).join(' | ');
+  if (r.enum) return r.enum.map(e=>JSON.stringify(e)).join(' | ');
+  if (r.type === 'array') return 'array<' + (refName(r.items) || typeOf(r.items)) + '>';
+  if (r.type === 'object' && r.additionalProperties && !r.properties) return 'map<string, ' + (typeof r.additionalProperties==='object'? typeOf(r.additionalProperties):'any') + '>';
+  return (r.format === 'binary' ? 'file' : r.type) || 'any';
+}
+function rows(schema, prefix='', depth=0, out=[]) {
+  const r = ref(schema); if (!r || !r.properties) return out;
+  const req = r.required || [];
+  for (const [k, v] of Object.entries(r.properties)) {
+    const rv = ref(v);
+    out.push({name: prefix + k, type: typeOf(v), req: req.includes(k), desc: (rv && rv.description) || '', def: rv && rv.default});
+    if (depth < 1 && rv && rv.type === 'object' && rv.properties) rows(rv, prefix + k + '.', depth+1, out);
+    else if (depth < 1 && rv && rv.type === 'array' && ref(rv.items) && ref(rv.items).properties && !refName(rv.items)) rows(ref(rv.items), prefix + k + '[].', depth+1, out);
+  }
+  return out;
+}
+function table(rs, withReq=true) {
+  if (!rs.length) return '';
+  return '<table><tr><th>Field</th><th>Type</th>' + (withReq?'<th></th>':'') + '<th>Description</th></tr>' +
+    rs.map(r => `<tr><td><code>${esc(r.name)}</code></td><td><code>${esc(r.type)}</code></td>${withReq?`<td>${r.req?'<span class="req">required</span>':'<span class="opt">optional</span>'}</td>`:''}<td>${md(r.desc)}${r.def!==undefined?` <span class="opt">Default: <code>${esc(JSON.stringify(r.def))}</code></span>`:''}</td></tr>`).join('') + '</table>';
+}
+function sample(schema, d=0) {
+  const r = ref(schema); if (!r || d > 4) return null;
+  if (r.example !== undefined) return r.example;
+  if (r.oneOf) return sample(r.oneOf[0], d+1);
+  if (r.enum) return r.enum[0];
+  switch (r.type) {
+    case 'object': { const o = {}; if (r.properties) for (const [k,v] of Object.entries(r.properties)) o[k] = sample(v, d+1); return o; }
+    case 'array': return [sample(r.items, d+1)];
+    case 'integer': return 0; case 'number': return 0; case 'boolean': return false;
+    default: return r.format === 'binary' ? '@file' : 'string';
+  }
+}
+const J = o => JSON.stringify(o, null, 2);
+const cfg = { base: 'http://localhost:8080', key: 'air_YOUR_KEY', admin: 'YOUR_ADMIN_TOKEN' };
+
+function curl(path, method, op) {
+  const admin = (op.security||[]).some(s => s.adminAuth);
+  const noauth = op.security && op.security.length === 0;
+  let url = cfg.base + path.replace(/\{id\}/g,'1').replace('{action}', (op.parameters||[]).map(ref).find(p=>p.name==='action')?.schema.enum?.[0] || 'enable');
+  const q = [];
+  let c = 'curl -s' + (method !== 'GET' ? ' -X ' + method : '') + ' "' + url + '"';
+  if (!noauth) c += ' \\\n  -H "Authorization: Bearer ' + (admin ? cfg.admin : cfg.key) + '"';
+  const act = path.includes('{action}') ? url.split('/').pop() : null;
+  const rb = (act && act !== 'key' && act !== 'limits') ? null : (op.requestBody && op.requestBody.content);
+  if (rb) {
+    if (rb['application/json']) {
+      const mt = rb['application/json'];
+      let ex = mt.example;
+      if (ex === undefined && mt.examples) ex = Object.values(mt.examples)[0].value;
+      if (ex === undefined) ex = sample(mt.schema);
+      c += ' \\\n  -H "Content-Type: application/json" \\\n  -d \'' + JSON.stringify(ex) + '\'';
+    } else if (rb['multipart/form-data']) {
+      const sch = ref(rb['multipart/form-data'].schema), props = sch.properties, need = sch.required || [];
+      for (const [k, v0] of Object.entries(props)) {
+        const v = ref(v0);
+        if (!need.includes(k) && v.example === undefined) continue;
+        const isFile = v.format === 'binary', isFiles = v.type === 'array' && ref(v.items).format === 'binary';
+        if (isFile) c += ' \\\n  -F "' + k + '=@recording.mp3"';
+        else if (isFiles) c += ' \\\n  -F "' + k + '=@sample1.mp3" \\\n  -F "' + k + '=@sample2.wav"';
+        else c += ' \\\n  -F ' + JSON.stringify(k + '=' + (v.example !== undefined ? v.example : v.type === 'boolean' ? 'true' : 'value')).replace(/\$/g,'\\$');
+      }
+    }
+  }
+  if (path === '/v1/speak') c += ' \\\n  --output out.wav';
+  return c;
+}
+function respBlock(code, r) {
+  const rr = ref(r);
+  let html = `<div><span class="st ${code[0]==='2'?'s2':code[0]==='4'?'s4':'s5'}">${esc(code)}</span> ${md(rr.description||'')}`;
+  const hdr = rr.headers ? Object.entries(rr.headers).map(([k,v])=>`<code>${esc(k)}</code>`).join(', ') : '';
+  if (hdr) html += ` <span class="opt">Headers: ${hdr}</span>`;
+  const c = rr.content;
+  if (c) {
+    const [ct, mt] = Object.entries(c)[0];
+    if (ct === 'application/json' && mt.schema) {
+      let ex = mt.example !== undefined ? mt.example : sample(mt.schema);
+      html += '<pre><code>' + esc(J(ex)) + '</code></pre>';
+    } else html += ` <span class="opt">(${esc(Object.keys(c).join(', '))})</span>`;
+  }
+  return html + '</div>';
+}
+function opCard(path, method, op) {
+  const id = (method + path).replace(/[^a-zA-Z0-9]+/g,'-');
+  const m = method.toUpperCase();
+  let h = `<details class="card" id="${id}" data-s="${esc((m+' '+path+' '+(op.summary||'')+' '+(op.tags||[]).join(' ')).toLowerCase())}"><summary><span class="badge ${m}">${m}</span><span class="path">${esc(path)}</span><span class="sum">${esc(op.summary||'')}</span></summary><div class="body">`;
+  const admin = (op.security||[]).some(s=>s.adminAuth), noauth = op.security && op.security.length===0;
+  h += `<p><span class="tag">${noauth?'public':admin?'admin token':'tenant key'}</span></p>`;
+  if (op.description) h += '<p>' + md(op.description) + '</p>';
+  const params = (op.parameters||[]).map(ref).filter(p => p.in !== 'path' || p.name === 'id' || true);
+  if (params.length) h += '<h4>Parameters</h4>' + table(params.map(p => ({name: p.name + ' (' + p.in + ')', type: typeOf(p.schema), req: !!p.required, desc: p.description||''})));
+  const rb = op.requestBody && op.requestBody.content;
+  if (rb) {
+    const [ct, mt] = Object.entries(rb)[0];
+    h += `<h4>Request body <span class="opt">${esc(ct)}</span></h4>`;
+    const rs = rows(mt.schema);
+    h += table(rs) || '';
+    if (ref(mt.schema) && ref(mt.schema).description) h += '<p class="opt">' + md(ref(mt.schema).description) + '</p>';
+    if (mt.examples && ct==='application/json') h += Object.values(mt.examples).map(e=>`<p class="opt">${esc(e.summary||'Example')}</p><pre><code>${esc(J(e.value))}</code></pre>`).join('');
+  }
+  h += '<h4>Example</h4><pre data-curl="1"><code>' + esc(curl(path, m, op)) + '</code></pre>';
+  h += '<h4>Responses</h4>' + Object.entries(op.responses).map(([c,r]) => respBlock(c,r)).join('');
+  return h + '</div></details>';
+}
+
+function cliHtml() {
+  return CLI.map(c => `<details class="card" id="cli-${c.name.replace(/\W+/g,'-')}" data-s="cli ${esc(c.name)} ${esc(c.desc)}"><summary><span class="badge" style="background:var(--muted)">CLI</span><span class="path">airouter ${esc(c.name)}</span><span class="sum">${esc(c.desc)}</span></summary><div class="body">
+  <pre><code>${esc(c.usage)}</code></pre>
+  ${c.flags && c.flags.length ? '<table><tr><th>Flag</th><th>Default</th><th>Description</th></tr>' + c.flags.map(f=>`<tr><td><code>${esc(f[0])}</code></td><td>${f[1]?'<code>'+esc(f[1])+'</code>':''}</td><td>${md(f[2])}</td></tr>`).join('') + '</table>' : ''}
+  ${c.examples ? '<h4>Examples</h4><pre><code>' + esc(c.examples) + '</code></pre>' : ''}</div></details>`).join('');
+}
+
+function render() {
+  const tags = SPEC.tags.map(t => t.name);
+  const byTag = {};
+  for (const [p, ops] of Object.entries(SPEC.paths)) for (const [m, op] of Object.entries(ops)) (byTag[op.tags[0]] ||= []).push([p, m, op]);
+  let h = `<h1>airouter documentation</h1>
+  <p>One Go binary and library that routes your prompt across many <b>free-tier AI providers</b> (Groq, Gemini, Gemma, OpenRouter, Z.AI, Mistral, SambaNova, Ollama, any OpenAI-compatible URL) and <b>fails over automatically</b> when one hits a limit. It does text chat, text-to-speech and speech-to-text.</p>
+  <div class="grid"><div><b>HTTP API</b><br><span class="sum">Native and OpenAI-compatible endpoints</span><br><a href="#sec-native">Jump to endpoints</a></div><div><b>CLI</b><br><span class="sum">ask, speak, serve, provider, me …</span><br><a href="#sec-cli">Jump to commands</a></div><div><b>Swagger UI</b><br><span class="sum">Try the API in your browser</span><br><a href="swagger.html">Open Swagger</a></div><div><b>Hosting</b><br><span class="sum">Put these docs on GitHub Pages</span><br><a href="#sec-host">Read the guide</a></div></div>
+
+  <h2 id="sec-start">Quick start</h2>
+<pre><code>git clone https://github.com/mrmhthegreat/airouter && cd airouter
+make build
+export GROQ_API_KEY=gsk_... GEMINI_API_KEY=...
+export AIROUTER_ADMIN_TOKEN=change-me AIROUTER_SECRET=$(openssl rand -hex 32)
+./bin/airouter bootstrap                  # import the free-pool models
+./bin/airouter ask "Write one sentence about rain"
+./bin/airouter tenant add acme -limit 2000  # prints an API key (air_...) once
+./bin/airouter serve -addr :8080          # web UI at / , OpenAI API at /v1</code></pre>
+  <p>Set the values below and every curl example on this page updates:</p>
+  <div class="cfg"><label>Server URL<input id="cfg-base" value="${cfg.base}"></label><label>Tenant key<input id="cfg-key" value="${cfg.key}"></label><label>Admin token<input id="cfg-admin" value="${cfg.admin}"></label></div>
+  <div class="note"><b>Docs vs server:</b> this page is static. The API itself is the Go server you run (<code>airouter serve</code>), on your machine or a host. GitHub Pages cannot run it.</div>
+
+  <h2 id="sec-auth">Authentication</h2>
+  <table><tr><th>Who</th><th>Header</th><th>Value</th></tr>
+  <tr><td>Tenant (user or app)</td><td><code>Authorization: Bearer air_...</code> or <code>X-API-Key: air_...</code></td><td>Key printed by <code>tenant add</code></td></tr>
+  <tr><td>Admin (operator)</td><td><code>Authorization: Bearer &lt;token&gt;</code></td><td><code>AIROUTER_ADMIN_TOKEN</code>. If unset, admin endpoints return 403.</td></tr></table>
+  <p>The admin token also works on tenant endpoints. Add <code>X-Tenant-ID: acme</code> (or <code>?tenant=acme</code>) to act as that tenant. For browser apps on another origin start the server with <code>-cors https://yourname.github.io</code>.</p>
+
+  <h2 id="sec-errors">Errors and status codes</h2>
+  <p>Native endpoints: <code>{"error":"...","retry_after_seconds":35,"reasons":{},"attempts":[]}</code>. OpenAI endpoints: <code>{"error":{"message","type","code","param"},"airouter":{...}}</code>.</p>
+  <table><tr><th>Code</th><th>Meaning</th><th>Retry?</th></tr>
+  <tr><td>400</td><td>Invalid request, every provider rejected it, or cloning without <code>consent=true</code></td><td>No, fix it</td></tr>
+  <tr><td>401</td><td>Missing or invalid key</td><td>No</td></tr>
+  <tr><td>403</td><td>Tenant disabled, or admin API disabled</td><td>No</td></tr>
+  <tr><td>404</td><td>Unknown id, model or voice (also for another tenant's id). A wrong voice never pauses the provider</td><td>No</td></tr>
+  <tr><td>429</td><td><b>Your tenant's</b> daily cap is used up (<code>Retry-After</code>)</td><td>After reset</td></tr>
+  <tr><td>502</td><td>Providers were tried and all failed (<code>attempts</code> says why)</td><td>Yes, soon</td></tr>
+  <tr><td>503</td><td>Every provider is limited or cooling down (<code>Retry-After</code>, <code>reasons</code>)</td><td>Yes, after <code>Retry-After</code></td></tr>
+  <tr><td>504</td><td>Whole request timed out (default 2 min)</td><td>Yes</td></tr></table>`;
+
+  const secs = [['Native','sec-native','Native API'],['Voices','sec-voices','Voices (ElevenLabs)'],['OpenAI-compatible','sec-openai','OpenAI-compatible API'],['Me (tenant self-service)','sec-me','Me: tenant self-service'],['Admin','sec-admin','Admin API'],['Public','sec-public','Public endpoints']];
+  for (const [tag, id, title] of secs) {
+    const t = SPEC.tags.find(x=>x.name===tag);
+    h += `<h2 id="${id}">${title}</h2><p>${md(t.description)}</p>` + (byTag[tag]||[]).map(([p,m,o])=>opCard(p,m,o)).join('');
+  }
+  h += `<h2 id="sec-cli">CLI reference</h2><p>For <code>ask</code>, <code>speak</code>, <code>transcribe</code> put flags <b>before</b> the text or file; for <code>tenant</code>, <code>provider</code>, <code>voice</code>, <code>me</code> flags work before or after the id. Every command accepts <code>-db FILE</code> (default <code>$AIROUTER_DB</code> or <code>./airouter.db</code>) except <code>me</code>, which talks HTTP.</p>` + cliHtml();
+  h += `<h2 id="sec-host">Host these docs on GitHub Pages</h2>
+  <ol><li>Copy the <code>docs/</code> folder into your repo (already there if you cloned it) and push to <code>main</code>.</li>
+  <li>On GitHub: <b>Settings → Pages → Build and deployment → Source: Deploy from a branch</b>, branch <code>main</code>, folder <code>/docs</code>, Save.</li>
+  <li>After about a minute the site is live at <code>https://mrmhthegreat.github.io/airouter/</code> and Swagger at <code>/swagger.html</code>.</li></ol>
+  <p>Full guide, custom domain and the optional GitHub Actions deploy: see <a href="https://github.com/mrmhthegreat/airouter/blob/main/docs/HOSTING.md">HOSTING.md</a>. To host the actual <b>server</b> (Docker, Fly.io, Render, VPS) see the same file.</p>
+  <p>More guides on GitHub: <a href="https://github.com/mrmhthegreat/airouter/blob/main/docs/ELEVENLABS.md">ELEVENLABS.md</a> (voices, cloning, WhatsApp voice notes) and <a href="https://github.com/mrmhthegreat/airouter/blob/main/docs/EMBEDDING.md">EMBEDDING.md</a> (Go library, several processes on one SQLite file).</p><p class="sum">Free-tier limits change. Always re-check the provider console (<code>airouter free-pool</code> shows the <i>verified on</i> date).</p>`;
+  $('#main').innerHTML = h;
+
+  let n = '';
+  n += '<h4>Guide</h4>' + [['sec-start','Quick start'],['sec-auth','Authentication'],['sec-errors','Errors']].map(([i,t])=>`<a href="#${i}">${t}</a>`).join('');
+  for (const [tag, id, title] of secs) {
+    n += `<h4>${title}</h4>` + (byTag[tag]||[]).map(([p,m,o]) => `<a href="#${(m+p).replace(/[^a-zA-Z0-9]+/g,'-')}" data-s="${esc((m+' '+p+' '+o.summary).toLowerCase())}"><span class="m ${m.toUpperCase()}" style="background:none;color:var(--${m==='get'?'get':m==='delete'?'del':m==='patch'?'patch':'post'})">${m.toUpperCase()}</span>${esc(p)}</a>`).join('');
+  }
+  n += '<h4>CLI</h4>' + CLI.map(c=>`<a href="#cli-${c.name.replace(/\W+/g,'-')}" data-s="cli ${esc(c.name)}">${esc(c.name)}</a>`).join('') + '<h4>More</h4><a href="#sec-host">Host on GitHub Pages</a><a href="swagger.html">Swagger UI</a>';
+  $('#navlinks').innerHTML = n;
+  wire();
+}
+function wire() {
+  document.querySelectorAll('pre').forEach(p => { if (p.querySelector('.copy')) return; const b = document.createElement('button'); b.className='copy'; b.textContent='Copy'; b.onclick = () => { navigator.clipboard.writeText(p.querySelector('code').textContent); b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1200); }; p.appendChild(b); });
+  for (const id of ['base','key','admin']) $('#cfg-'+id).oninput = e => { cfg[id] = e.target.value; refreshCurl(); };
+  $('#q').oninput = e => { const v = e.target.value.toLowerCase().trim(); document.querySelectorAll('.card,#navlinks a[data-s]').forEach(el => el.style.display = !v || el.dataset.s.includes(v) ? '' : 'none'); };
+  document.querySelectorAll('#navlinks a').forEach(a => a.onclick = () => { $('#nav').classList.remove('open'); const t = $(a.getAttribute('href')); if (t && t.tagName==='DETAILS') t.open = true; });
+  if (location.hash) { const t = $(location.hash); if (t && t.tagName==='DETAILS') t.open = true; }
+}
+function refreshCurl() {
+  document.querySelectorAll('.card').forEach(card => {
+    const pre = card.querySelector('pre[data-curl]'); if (!pre) return;
+    const [m, ...rest] = card.querySelector('.badge').textContent.trim().split(' '); const path = card.querySelector('.path').textContent;
+    const op = SPEC.paths[path][m.toLowerCase()];
+    pre.querySelector('code').textContent = curl(path, m, op);
+  });
+}
+$('#menu').onclick = () => $('#nav').classList.toggle('open');
+$('#theme').onclick = () => { const r = document.documentElement; const dark = getComputedStyle(r).getPropertyValue('--bg').trim() === '#0f1318'; r.dataset.theme = dark ? 'light' : 'dark'; };
+render();
+</script>
+</body>
+</html>

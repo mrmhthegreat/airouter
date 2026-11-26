@@ -43,6 +43,14 @@ var Definitions = map[string]Definition{
 		APIKeyEnv: "GROQ_API_KEY",
 		ResetTZ:   "UTC",
 	},
+	"elevenlabs": { // TTS (eleven_multilingual_v2, eleven_flash_v2_5, ...) and STT (scribe_v1), plus voice cloning. Own request shape: see pkg/elevenlabs.
+		// BaseURL has no /v1: the client adds /v1/... itself. Use category "tts" for speech models, "stt" for scribe_v1.
+		Kind:      "openai",
+		BaseURL:   "https://api.elevenlabs.io",
+		APIKeyEnv: "ELEVENLABS_API_KEY",
+		ResetTZ:   "UTC",
+		Category:  "tts",
+	},
 	"gemini": {
 		Kind:      "openai",
 		BaseURL:   "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -60,7 +68,7 @@ var Definitions = map[string]Definition{
 	"gemini-tts": { // Gemini native generateContent endpoint for TTS + STT (transcribe).
 		// Different request shape from OpenAI-compat /chat/completions: r.Speak uses
 		// POST {base}/models/{model}:generateContent with audio modality config.
-		// r.Transcribe on Gemini is NOT yet implemented (needs Files API upload).
+		// r.Transcribe on Gemini uses the Files API upload + interactions endpoint.
 		Kind:       "openai",
 		BaseURL:    "https://generativelanguage.googleapis.com/v1beta",
 		APIKeyEnv:  "GEMINI_API_KEY",
@@ -189,11 +197,13 @@ const (
 	CategoryTTS = "tts"
 	// CategorySTT = speech-to-text / transcribe. Routed via r.Transcribe / `airouter transcribe` / POST /v1/transcribe.
 	CategorySTT = "stt"
+	// CategoryEmbed = text embeddings. Routed via r.Embed.
+	CategoryEmbed = "embed"
 )
 
 // Categories is the full list of categories used in FreePool, in display order.
 var Categories = []string{
-	CategoryText, CategoryTTS, CategorySTT,
+	CategoryText, CategoryTTS, CategorySTT, CategoryEmbed,
 }
 
 // ----- the free-tier catalog ------------------------------------------------
@@ -248,6 +258,10 @@ var FreePool = []FreeModel{
 		Notes:      "Qwen 3.8 27B — strong multilingual + tool use.",
 		VerifiedOn: "2026-11-17"},
 
+	// Gemini embeddings (used by knowledge-base vector search). Limits are a
+	// conservative estimate, not a verified quote: check AI Studio and adjust.
+	{Preset: "gemini", Model: "gemini-embedding-001", Category: CategoryEmbed, RPM: 60, RPD: 1000, TPM: 30000, Priority: 20, Workers: 2,
+		Notes: "Text embeddings via the OpenAI-compatible endpoint. Limits are a conservative guess; verify in AI Studio."},
 	// Gemini — Google AI Studio free tier. Resets at PT midnight.
 	// Gemini 3.5 Flash-Lite is the recommended primary (fast, capable, 1M TPM).
 	{Preset: "gemini", Model: "gemini-3.5-flash-lite", Category: CategoryText, RPM: 15, RPD: 500, TPM: 250000, Priority: 25, Workers: 2,

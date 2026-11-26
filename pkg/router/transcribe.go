@@ -19,9 +19,8 @@ import (
 // provider (category="stt"), sends the audio, and on failure fails over to the
 // next provider. Returns the transcribed text plus metadata.
 //
-// Currently supports Groq Whisper (OpenAI-compatible /audio/transcriptions).
-// Gemini 3.5 Transcribe is in the catalog but NOT yet routed because it
-// requires a two-step Files API upload + interactions endpoint call.
+// Supports Groq Whisper (OpenAI-compatible /audio/transcriptions), Gemini and ElevenLabs Scribe.
+// Gemini transcription is routed too: see callTranscribeGemini (Files API upload).
 func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*types.TranscribeResponse, error) {
 	start := r.now()
 	if req.TenantID == "" {
@@ -40,36 +39,42 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 	if tenant.Disabled {
 		return nil, types.ErrTenantDisabled
 	}
-	if tenant.DailyRequestLimit > 0 {
-		loc := locFor(tenant.TZ)
-		day := start.In(loc).Format("2006-01-02")
-		if used, err := r.store.TenantDayUsage(ctx, tenant.ID, day); err == nil && used >= tenant.DailyRequestLimit {
-			now := start.In(loc)
-			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
-			return nil, &types.TenantLimitError{RetryAfter: next.Sub(now)}
-		}
+	ownOnly, capErr, err := r.capGate(ctx, tenant, start)
+	if err != nil {
+		return nil, err
 	}
 
 	cands := r.candidates(ctx, types.Request{TenantID: req.TenantID, Provider: req.Provider, Category: types.CategorySTT})
+	if ownOnly {
+		if cands = onlyOwn(cands); len(cands) == 0 {
+			return nil, capErr
+		}
+	}
 	if len(cands) == 0 {
 		return nil, errors.New("airouter: no STT providers configured (run `airouter bootstrap -category stt`)")
 	}
 
 	var attempts []types.Attempt
 	failed := map[int64]bool{}
-	deadline := start.Add(r.maxWait)
+	wait := r.maxWait
+	if req.MaxWait > 0 {
+		wait = req.MaxWait
+	}
+	deadline := start.Add(wait)
 
 	for {
 		now := r.now()
 		var picked *candidate
 		minWait := time.Duration(1<<62 - 1)
 		reasons := map[string]string{}
+		remaining := 0 // candidates not yet tried
 
 		for i := range cands {
 			c := &cands[i]
 			if failed[c.cfg.ID] {
 				continue
 			}
+			remaining++
 			if !c.cfg.HasKey() {
 				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + ")"
 				continue
@@ -86,6 +91,9 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 		}
 
 		if picked == nil {
+			if remaining == 0 && len(attempts) > 0 { // every provider was tried and failed: say why (400 vs 502)
+				return nil, r.allFailed(attempts)
+			}
 			if now.Add(minWait).After(deadline) || ctx.Err() != nil {
 				if minWait == time.Duration(1<<62-1) {
 					minWait = time.Hour
@@ -119,6 +127,7 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 			out := &types.TranscribeResponse{
 				Text:      text,
 				Provider:  picked.cfg.Name,
+				Own:       picked.cfg.TenantID != "",
 				Model:     picked.cfg.Model,
 				Language:  lang,
 				LatencyMS: r.now().Sub(start).Milliseconds(),
@@ -129,8 +138,8 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		r.classify(ctx, picked, err)
-		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error()})
+		f := r.classify(ctx, picked, err)
+		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error(), Status: f.status, Kind: f.kind})
 		failed[picked.cfg.ID] = true
 	}
 }
@@ -140,6 +149,9 @@ func (r *Router) Transcribe(ctx context.Context, req types.TranscribeRequest) (*
 // Files API, then POST the file URI to the /v1beta/interactions endpoint.
 // Detection: BaseURL contains "generativelanguage.googleapis.com" → Gemini.
 func (r *Router) callTranscribe(ctx context.Context, p types.ProviderConfig, req types.TranscribeRequest) (text, language string, err error) {
+	if isElevenLabs(p) {
+		return r.callTranscribeElevenLabs(ctx, p, req)
+	}
 	if strings.Contains(p.BaseURL, "generativelanguage.googleapis.com") {
 		return r.callTranscribeGemini(ctx, p, req)
 	}

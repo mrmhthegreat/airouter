@@ -117,7 +117,7 @@ func (r *Router) acquire(ctx context.Context, p types.ProviderConfig, st *provid
 		return false, st.coolUntil.Sub(now), false, "cooling down"
 	}
 	if st.inflight >= p.Workers {
-		return false, 250 * time.Millisecond, false, "busy"
+		return false, 30 * time.Millisecond, false, "busy" // a slot usually frees within milliseconds; polling at 250ms added needless latency
 	}
 	// RPM check: rolling 60-second window of request count.
 	cutoff := now.Add(-time.Minute)

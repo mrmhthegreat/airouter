@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>airouter API: Swagger UI</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
+<style>
+body{margin:0;font-family:system-ui,sans-serif}
+#bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 16px;background:#1b1f24;color:#fff;font-size:14px}
+#bar a{color:#9cc2ff}#bar input{flex:1;min-width:240px;padding:6px 8px;border-radius:6px;border:1px solid #555;background:#0f1318;color:#fff;font:13px monospace}
+#bar button{padding:6px 12px;border-radius:6px;border:0;background:#2563eb;color:#fff;cursor:pointer}
+#msg{padding:8px 16px;background:#fff7e0;color:#5a4300;font-size:13px}
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>airouter</b>
+  <label for="server">API server:</label>
+  <input id="server" value="http://localhost:8080" spellcheck="false">
+  <button id="apply">Apply</button>
+  <a href="index.html">← Docs</a>
+  <a href="openapi.yaml" download>openapi.yaml</a>
+</div>
+<div id="msg">"Try it out" calls the server above from your browser. Start it with <code>airouter serve -cors "*"</code> (or your Pages origin) so the browser is allowed to call it. Click <b>Authorize</b> and paste a tenant key (<code>air_...</code>) or the admin token.</div>
+<div id="swagger-ui"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
+<script>
+let spec = null;
+function mount() {
+  const url = document.getElementById('server').value.trim().replace(/\/+$/, '');
+  spec.servers = [{ url }];
+  SwaggerUIBundle({ spec, dom_id: '#swagger-ui', deepLinking: true, docExpansion: 'list', persistAuthorization: true, tryItOutEnabled: true });
+}
+fetch('openapi.json').then(r => r.json()).then(s => { spec = s; mount(); })
+  .catch(e => { document.getElementById('swagger-ui').textContent = 'Could not load openapi.json: ' + e + '. Serve this folder over http (not file://).'; });
+document.getElementById('apply').onclick = () => spec && mount();
+</script>
+</body>
+</html>

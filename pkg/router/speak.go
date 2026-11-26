@@ -44,38 +44,50 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 	if tenant.Disabled {
 		return nil, types.ErrTenantDisabled
 	}
-	if tenant.DailyRequestLimit > 0 {
-		loc := locFor(tenant.TZ)
-		day := start.In(loc).Format("2006-01-02")
-		if used, err := r.store.TenantDayUsage(ctx, tenant.ID, day); err == nil && used >= tenant.DailyRequestLimit {
-			now := start.In(loc)
-			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
-			return nil, &types.TenantLimitError{RetryAfter: next.Sub(now)}
-		}
+	ownOnly, capErr, err := r.capGate(ctx, tenant, start)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use the existing candidates() by constructing an internal Request with
 	// Category=tts. The Provider field is reused for pinning.
 	cands := r.candidates(ctx, types.Request{TenantID: req.TenantID, Provider: req.Provider, Category: types.CategoryTTS})
+	if ownOnly {
+		if cands = onlyOwn(cands); len(cands) == 0 {
+			return nil, capErr
+		}
+	}
+	var verr error
+	if cands, verr = r.voiceCandidates(ctx, req, cands); verr != nil {
+		return nil, verr
+	}
 	if len(cands) == 0 {
 		return nil, errors.New("airouter: no TTS providers configured (run `airouter bootstrap -category tts`)")
 	}
 
 	var attempts []types.Attempt
 	failed := map[int64]bool{}
-	deadline := start.Add(r.maxWait)
+	wait := r.maxWait
+	if req.MaxWait > 0 {
+		wait = req.MaxWait
+	}
+	deadline := start.Add(wait)
+	var lastVoiceErr *voiceNotFoundError // set while every failure so far was "voice not found"
+	otherFailure := false
 
 	for {
 		now := r.now()
 		var picked *candidate
 		minWait := time.Duration(1<<62 - 1)
 		reasons := map[string]string{}
+		remaining := 0 // candidates not yet tried
 
 		for i := range cands {
 			c := &cands[i]
 			if failed[c.cfg.ID] {
 				continue
 			}
+			remaining++
 			if !c.cfg.HasKey() {
 				reasons[c.cfg.Name] = "no API key (set $" + c.cfg.APIKeyEnv + ")"
 				continue
@@ -92,6 +104,12 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 		}
 
 		if picked == nil {
+			if lastVoiceErr != nil && !otherFailure && len(attempts) > 0 {
+				return nil, lastVoiceErr // the voice is wrong; waiting would not help
+			}
+			if remaining == 0 && len(attempts) > 0 { // every provider was tried and failed: say why (400 vs 502), do not claim "limited"
+				return nil, r.allFailed(attempts)
+			}
 			if now.Add(minWait).After(deadline) || ctx.Err() != nil {
 				if minWait == time.Duration(1<<62-1) {
 					minWait = time.Hour
@@ -121,11 +139,14 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 		}
 		_ = r.store.AddUsage(ctx, req.TenantID, picked.cfg.ID, dayOf(picked.cfg, now), 1, 0, errs)
 		if err == nil {
+			// The caller may want mp3 or opus while the provider returns WAV.
+			audio, contentType, format = maybeConvert(ctx, audio, contentType, format, req.Format)
 			out := &types.SpeakResponse{
 				Audio:       audio,
 				ContentType: contentType,
 				Format:      format,
 				Provider:    picked.cfg.Name,
+				Own:         picked.cfg.TenantID != "",
 				Model:       picked.cfg.Model,
 				Voice:       voice,
 				LatencyMS:   r.now().Sub(start).Milliseconds(),
@@ -136,8 +157,17 @@ func (r *Router) Speak(ctx context.Context, req types.SpeakRequest) (*types.Spea
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		r.classify(ctx, picked, err)
-		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error()})
+		var vnf *voiceNotFoundError
+		var f failure
+		if errors.As(err, &vnf) { // a wrong voice is the caller's mistake, not the provider's
+			lastVoiceErr = vnf
+		} else {
+			f = r.classify(ctx, picked, err)
+			if f.kind != kindBadRequest { // a 400 is the request's fault (e.g. a voice this provider does not know), not an outage
+				otherFailure = true
+			}
+		}
+		attempts = append(attempts, types.Attempt{Provider: picked.cfg.Name, Error: err.Error(), Status: f.status, Kind: f.kind})
 		failed[picked.cfg.ID] = true
 	}
 }
@@ -155,11 +185,20 @@ func (r *Router) callSpeak(ctx context.Context, p types.ProviderConfig, req type
 	if voice == "" {
 		voice = defaultVoice(p)
 	}
-	format = req.Format
+	format = strings.ToLower(strings.TrimSpace(req.Format))
 	if format == "" {
 		format = "wav"
 	}
+	// Groq's TTS only returns WAV. If the caller wants mp3/opus we ask for WAV
+	// and Speak converts it afterwards (needs ffmpeg). Sending "mp3" to Groq
+	// would be rejected with HTTP 400.
+	if isGroq(p) {
+		format = "wav"
+	}
 
+	if isElevenLabs(p) {
+		return r.callSpeakElevenLabs(ctx, p, req, format)
+	}
 	if strings.Contains(p.BaseURL, "generativelanguage.googleapis.com") {
 		return r.callSpeakGemini(ctx, p, req, voice, format)
 	}
@@ -290,7 +329,9 @@ func (r *Router) callSpeakGemini(ctx context.Context, p types.ProviderConfig, re
 	if ct == "" {
 		ct = "audio/wav"
 	}
-	// Gemini unary always returns WAV (PCM 24kHz mono with RIFF header).
+	// Gemini returns raw 16-bit PCM (mime "audio/L16;codec=pcm;rate=24000") with
+	// no header. Wrap it so callers and ffmpeg get a real WAV file.
+	audioBytes, ct = ensureWAV(audioBytes, ct)
 	return audioBytes, ct, "wav", voice, nil
 }
 
@@ -358,3 +399,6 @@ func estimateTTSAudioSeconds(text string) int {
 	}
 	return secs
 }
+
+// isGroq reports whether the provider is Groq's API.
+func isGroq(p types.ProviderConfig) bool { return strings.Contains(p.BaseURL, "api.groq.com") }

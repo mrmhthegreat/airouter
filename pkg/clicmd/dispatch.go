@@ -31,12 +31,13 @@ any OpenAI-compatible URL). Auto-switches when one hits a limit.
 Supports text chat, text-to-speech (TTS) and speech-to-text (STT).
 
   ask [flags] PROMPT...                send a prompt (or pipe it on stdin)
-  speak [flags] TEXT                   text → audio (WAV bytes; use -o to save to a file)
+  speak [flags] TEXT                   text → audio (WAV/mp3/opus; use -o to save to a file)
   transcribe [flags] FILE              audio file → text
+  voice list|clone|rm                  ElevenLabs voices: list, clone from recordings, delete
   serve [-addr :8080]                  run the HTTP API standalone
   provider add|list|rm|enable|disable|reset|set-key|limits|import   (add -tenant ID to act for one user)
   ollama list|add [-tenant ID] MODEL...
-  tenant add|list|rotate
+  tenant add|list|cap|rotate           (add/cap: -limit N -pool-only to count only shared-pool answers)
   me [-url U] [-key K] list|catalog|add|pick|ollama|limits|set-key|import|export|usage ...
                                        self-service for one user, over HTTP with their own key
   bootstrap [-preset NAME] [-category text|tts|stt|all] [-store-keys] [-tenant ID]
@@ -74,6 +75,8 @@ func Dispatch(args []string) error {
 		err = Ask(rest)
 	case "speak":
 		err = Speak(rest)
+	case "voice":
+		err = Voice(rest)
 	case "transcribe":
 		err = Transcribe(rest)
 	case "serve":

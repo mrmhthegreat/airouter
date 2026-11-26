@@ -1,0 +1,2396 @@
+openapi: 3.0.3
+info:
+  title: airouter API
+  version: '1.5'
+  description: 'airouter routes your prompt across many free-tier AI providers (Groq, Gemini, Gemma,
+
+    OpenRouter, Z.AI, Mistral, SambaNova, Ollama, any OpenAI-compatible URL) and
+
+    automatically fails over when one hits a limit.
+
+
+    **Authentication**
+
+    - Tenant endpoints: `Authorization: Bearer air_...` (or header `X-API-Key: air_...`).
+
+    - Admin endpoints: `Authorization: Bearer <AIROUTER_ADMIN_TOKEN>`.
+
+    - The admin token also works on tenant endpoints; add `X-Tenant-ID: acme` (or `?tenant=acme`) to act as that
+    tenant.
+
+
+    **Two API styles on one server**
+
+    - *Native* (`/v1/generate`, `/v1/speak`, `/v1/transcribe`) returns richer data (attempts, latency).
+
+    - *OpenAI-compatible* (`/v1/chat/completions`, `/v1/models`, `/v1/audio/*`) works with any OpenAI SDK.
+
+    '
+  license:
+    name: MIT
+    url: https://github.com/mrmhthegreat/airouter/blob/main/LICENSE
+servers:
+- url: http://localhost:8080
+  description: Local server (airouter serve -addr :8080)
+- url: https://your-airouter-host.example.com
+  description: Your deployed server (replace with your own URL)
+tags:
+- name: Native
+  description: Text, speech and transcription with full routing details
+- name: OpenAI-compatible
+  description: Drop-in for OpenAI SDKs (base URL = http://HOST/v1)
+- name: Me (tenant self-service)
+  description: A tenant manages its own models, keys and limits
+- name: Voices
+  description: 'ElevenLabs voices: list, clone from recordings, delete. Needs an ElevenLabs provider (`provider
+    add -preset elevenlabs`). A tenant never sees, uses or deletes another tenant''s clone.'
+- name: Admin
+  description: Needs the admin token
+- name: Public
+  description: No authentication
+security:
+- bearerAuth: []
+paths:
+  /healthz:
+    get:
+      tags:
+      - Public
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /v1/presets:
+    get:
+      tags:
+      - Public
+      summary: List built-in provider presets
+      description: Returns a map of preset name (groq, gemini, ...) to connection defaults.
+      security: []
+      responses:
+        '200':
+          description: Map of presets
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/Preset'
+  /v1/presets/free-pool:
+    get:
+      tags:
+      - Public
+      summary: Curated free-tier model catalog
+      security: []
+      parameters:
+      - name: category
+        in: query
+        description: Comma-separated filter, e.g. `text`, `tts,stt`, or `all`. Empty means all.
+        schema:
+          type: string
+          example: text
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  verified_on:
+                    type: string
+                    example: '2026-11-20'
+                  summary:
+                    type: object
+                    additionalProperties: true
+                  categories:
+                    type: array
+                    items:
+                      type: string
+  /v1/generate:
+    post:
+      tags:
+      - Native
+      summary: Generate text (or JSON) with automatic failover
+      description: 'Send either `prompt` **or** `messages`. The router tries providers by priority and fails over
+        on
+
+        429 / 5xx / bad key. Add `?format=text` (or `Accept: text/plain`) to get only the text.
+
+        Response headers: `X-AIRouter-Provider`, `X-AIRouter-Model`.
+
+        '
+      parameters:
+      - name: format
+        in: query
+        schema:
+          type: string
+          enum:
+          - text
+        description: '`text` returns plain text instead of JSON'
+      - &id001
+        $ref: '#/components/parameters/MaxWait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+            examples:
+              simple:
+                summary: Simple prompt
+                value:
+                  prompt: Say hi
+                  system: Be brief
+              json_mode:
+                summary: JSON answer
+                value:
+                  system: Reply as {"emotion":"..."} only.
+                  prompt: I failed my exam today
+                  json: true
+              chat:
+                summary: Multi-turn messages
+                value:
+                  messages:
+                  - role: user
+                    content: Hello
+                  - role: assistant
+                    content: Hi! How can I help?
+                  - role: user
+                    content: Write one sentence about rain
+                  max_tokens: 100
+                  temperature: 0.7
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-AIRouter-Provider:
+              schema:
+                type: string
+              description: Provider that answered
+            X-AIRouter-Model:
+              schema:
+                type: string
+              description: Model that answered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponse'
+              example:
+                text: Rain taps softly on the window.
+                provider: groq-openai/gpt-oss-120b
+                model: openai/gpt-oss-120b
+                tokens: 42
+                latency_ms: 610
+            text/plain:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TenantLimit'
+        '502':
+          $ref: '#/components/responses/UpstreamFailed'
+        '503':
+          $ref: '#/components/responses/ProvidersBusy'
+        '504':
+          $ref: '#/components/responses/Timeout'
+  /v1/speak:
+    post:
+      tags:
+      - Native
+      summary: Text to speech (TTS)
+      description: 'Returns raw audio bytes by default (`Content-Type: audio/wav`).
+
+        Add `?format=json` (or `Accept: application/json`) to get a JSON envelope with base64 audio.
+
+        Headers on raw audio: `X-AIRouter-Provider`, `X-AIRouter-Model`, `X-AIRouter-Voice`.
+
+
+        Note: the query `?format=json` controls the *response envelope*; the body field `format` controls the *audio
+        format* (wav/mp3/pcm).
+
+
+
+        **Voices:** with ElevenLabs you can pick a voice per request by id or by name, tune it with `voice_settings`,
+        and use voices you cloned (see *Voices*). A wrong voice answers `404 voice_not_found` and never pauses the
+        provider.'
+      parameters:
+      - name: format
+        in: query
+        schema:
+          type: string
+          enum:
+          - json
+      - *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeakRequest'
+            example:
+              text: Hello world
+              voice: Rachel
+              format: opus
+              voice_settings:
+                stability: 0.4
+                speed: 1.05
+      responses:
+        '200':
+          description: Audio
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeakResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ProvidersBusy'
+  /v1/transcribe:
+    post:
+      tags:
+      - Native
+      summary: Speech to text (STT)
+      description: Multipart upload (max 32 MB). Add `?format=text` for plain text output.
+      parameters:
+      - name: format
+        in: query
+        schema:
+          type: string
+          enum:
+          - text
+      - *id001
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio file (mp3, wav, m4a, ogg, flac, webm)
+                language:
+                  type: string
+                  example: en
+                  description: Optional ISO-639-1 hint
+                prompt:
+                  type: string
+                  description: Optional spelling/style hint (max ~224 tokens)
+                provider:
+                  type: string
+                  description: Pin one STT provider by name
+      responses:
+        '200':
+          description: Transcript
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscribeResponse'
+            text/plain:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ProvidersBusy'
+  /v1/usage:
+    get:
+      tags:
+      - Native
+      summary: Usage and live provider status
+      parameters:
+      - name: day
+        in: query
+        schema:
+          type: string
+          example: '2026-11-23'
+        description: YYYY-MM-DD. Default is today (per provider timezone).
+      responses:
+        '200':
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  usage:
+                    $ref: '#/components/schemas/UsageReport'
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderStatus'
+                  server_time:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/whoami:
+    get:
+      tags:
+      - Native
+      summary: Who am I (role and tenant)
+      responses:
+        '200':
+          description: Identity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role:
+                    type: string
+                    enum:
+                    - tenant
+                    - admin
+                  tenant:
+                    $ref: '#/components/schemas/Tenant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/chat/completions:
+    post:
+      tags:
+      - OpenAI-compatible
+      summary: Chat completions (OpenAI format)
+      description: '`model` = `auto` (router chooses and fails over) or a provider name / exact model id to pin
+        one.
+
+        `stream: true` is *buffered streaming*: the full answer is generated first, then sent as SSE chunks.
+
+        **Not supported:** tool/function calling and image input (returns 400).
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            example:
+              model: auto
+              messages:
+              - role: user
+                content: Hello
+      responses:
+        '200':
+          description: Chat completion (or SSE stream when stream=true)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/OAIError'
+        '401':
+          $ref: '#/components/responses/OAIError'
+        '404':
+          $ref: '#/components/responses/OAIError'
+        '429':
+          $ref: '#/components/responses/OAIError'
+        '502':
+          $ref: '#/components/responses/OAIError'
+        '503':
+          $ref: '#/components/responses/OAIError'
+  /v1/models:
+    get:
+      tags:
+      - OpenAI-compatible
+      summary: List text models (OpenAI format)
+      responses:
+        '200':
+          description: Model list (always includes `auto`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: auto
+                        object:
+                          type: string
+                          example: model
+                        created:
+                          type: integer
+                        owned_by:
+                          type: string
+                          example: airouter
+  /v1/audio/speech:
+    post:
+      tags:
+      - OpenAI-compatible
+      summary: Text to speech (OpenAI format)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - input
+              properties:
+                model:
+                  type: string
+                  example: auto
+                  description: auto, a provider name, or an exact TTS model id
+                input:
+                  type: string
+                  example: Hello world
+                voice:
+                  type: string
+                  example: tara
+                response_format:
+                  type: string
+                  example: wav
+      responses:
+        '200':
+          description: Raw audio bytes
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/OAIError'
+        '503':
+          $ref: '#/components/responses/OAIError'
+  /v1/audio/transcriptions:
+    post:
+      tags:
+      - OpenAI-compatible
+      summary: Speech to text (OpenAI path, same handler as /v1/transcribe)
+      description: Same multipart fields as `/v1/transcribe` (`file`, `language`, `prompt`, `provider`). The OpenAI
+        `model` field is ignored; use `provider` to pin one. Errors use the native error shape.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                language:
+                  type: string
+                prompt:
+                  type: string
+                provider:
+                  type: string
+      responses:
+        '200':
+          description: Transcript
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscribeResponse'
+  /v1/me:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: Who am I
+      responses:
+        '200':
+          description: Tenant profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role:
+                    type: string
+                    example: tenant
+                  tenant:
+                    $ref: '#/components/schemas/Tenant'
+    patch:
+      tags:
+      - Me (tenant self-service)
+      summary: Update my name / timezone
+      description: The daily request limit can only be changed by the operator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: Alice
+                tz:
+                  type: string
+                  example: Asia/Karachi
+      responses:
+        '200':
+          description: Updated profile
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/me/rotate-key:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Rotate my API key (old key stops working)
+      responses:
+        '200':
+          description: New key, shown once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewKey'
+  /v1/me/usage:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: My usage and my model status
+      parameters:
+      - name: day
+        in: query
+        schema:
+          type: string
+          example: '2026-11-23'
+      responses:
+        '200':
+          description: Usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    type: string
+                  usage:
+                    $ref: '#/components/schemas/UsageReport'
+                  own:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderStatus'
+                  shared:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SharedModel'
+  /v1/me/bootstrap:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Add free-pool models using MY keys
+      description: Never reads the server's environment variables. You must send your own keys.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - keys
+              properties:
+                keys:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  example:
+                    GROQ_API_KEY: gsk_...
+                    GEMINI_API_KEY: AIza...
+                preset:
+                  type: string
+                  example: groq
+                  description: Only this preset
+                overwrite:
+                  type: boolean
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddedSkipped'
+  /v1/me/providers:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: My models with live status (plus read-only shared list)
+      responses:
+        '200':
+          description: Models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    type: string
+                  own:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderStatus'
+                  shared:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SharedModel'
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Add one model
+      description: Needs your own `api_key` (except Ollama). Stored encrypted and never returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+            example:
+              preset: gemini
+              model: gemini-2.5-flash
+              api_key: AIza...
+              rpm: 10
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/me/providers/{id}:
+    delete:
+      tags:
+      - Me (tenant self-service)
+      summary: Remove one of my models
+      parameters:
+      - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/me/providers/{id}/{action}:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: enable | disable | reset | key | limits
+      description: '- `enable` / `disable`: no body
+
+        - `reset`: lift a pause (no body)
+
+        - `key`: body `{"api_key":"..."}`
+
+        - `limits`: body with any of `rpm`, `rpd`, `tpm`, `workers`, `priority` (integers)
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProviderId'
+      - name: action
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - enable
+          - disable
+          - reset
+          - key
+          - limits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                api_key:
+                  type: string
+                rpm:
+                  type: integer
+                rpd:
+                  type: integer
+                tpm:
+                  type: integer
+                workers:
+                  type: integer
+                priority:
+                  type: integer
+            example:
+              rpm: 20
+              rpd: 500
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  ok:
+                    type: boolean
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/me/catalog:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: Providers and models I can pick from
+      responses:
+        '200':
+          description: Catalog (`added` marks models you already have)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        preset:
+                          type: string
+                        kind:
+                          type: string
+                        key_env:
+                          type: string
+                        needs_key:
+                          type: boolean
+                  models:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CatalogModel'
+                  verified_on:
+                    type: string
+  /v1/me/catalog/add:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Add several catalog models with one key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - preset
+              - models
+              properties:
+                preset:
+                  type: string
+                  example: groq
+                api_key:
+                  type: string
+                  example: gsk_...
+                models:
+                  type: array
+                  items:
+                    type: string
+                  example:
+                  - openai/gpt-oss-20b
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddedSkipped'
+  /v1/me/ollama:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: Models installed on the server's Ollama
+      responses:
+        '200':
+          description: Ollama models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                  error:
+                    type: string
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          example: gemma3:4b
+                        parameter_size:
+                          type: string
+                        size_gb:
+                          type: string
+  /v1/me/ollama/add:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Use installed Ollama models
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - models
+              properties:
+                models:
+                  type: array
+                  items:
+                    type: string
+                  example:
+                  - gemma3:4b
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddedSkipped'
+  /v1/me/import:
+    post:
+      tags:
+      - Me (tenant self-service)
+      summary: Import my models from a JSON file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - providers
+              properties:
+                providers:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ProviderInput'
+      responses:
+        '200':
+          description: Per-entry result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: array
+                    items:
+                      type: string
+                  failed:
+                    type: object
+                    additionalProperties:
+                      type: string
+  /v1/me/export:
+    get:
+      tags:
+      - Me (tenant self-service)
+      summary: Export my models as importable JSON (no keys)
+      responses:
+        '200':
+          description: File download
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderConfig'
+  /v1/providers:
+    get:
+      tags:
+      - Admin
+      summary: List all providers with live status
+      security:
+      - adminAuth: []
+      responses:
+        '200':
+          description: Providers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProviderStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags:
+      - Admin
+      summary: Add or update a provider
+      description: Include `id` to update an existing one. `api_key` is stored encrypted and never echoed back.
+      security:
+      - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+            example:
+              preset: groq
+              model: openai/gpt-oss-120b
+              api_key: gsk_...
+              rpm: 30
+              rpd: 1000
+              tpm: 8000
+              priority: 10
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/providers/{id}:
+    delete:
+      tags:
+      - Admin
+      summary: Delete a provider
+      security:
+      - adminAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+  /v1/providers/{id}/{action}:
+    post:
+      tags:
+      - Admin
+      summary: enable | disable | reset | key
+      description: '- `enable` -> `{"id":3,"disabled":false}`
+
+        - `disable` -> `{"id":3,"disabled":true}`
+
+        - `reset` (lift a pause) -> `{"id":3,"paused":false}`
+
+        - `key` with body `{"api_key":"..."}` -> `{"id":3,"key_stored":true}`
+
+        '
+      security:
+      - adminAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProviderId'
+      - name: action
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - enable
+          - disable
+          - reset
+          - key
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                api_key:
+                  type: string
+      responses:
+        '200':
+          description: OK
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/bootstrap:
+    post:
+      tags:
+      - Admin
+      summary: Seed the DB from the free-pool catalog
+      security:
+      - adminAuth: []
+      parameters:
+      - name: category
+        in: query
+        schema:
+          type: string
+          example: text,tts,stt
+        description: Default text. Use `all` for everything.
+      - name: preset
+        in: query
+        schema:
+          type: string
+          example: groq
+      - name: overwrite
+        in: query
+        schema:
+          type: string
+          enum:
+          - '1'
+          - 'true'
+      - name: store_keys
+        in: query
+        schema:
+          type: string
+          enum:
+          - '1'
+          - 'true'
+        description: Copy keys found in env vars into the encrypted DB
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: array
+                    items:
+                      type: string
+                  skipped:
+                    type: array
+                    items:
+                      type: string
+                  verified:
+                    type: string
+                  categories_used:
+                    type: string
+                    example: text (default)
+                  available_categories:
+                    type: array
+                    items:
+                      type: string
+                  summary:
+                    type: object
+                    additionalProperties: true
+                  next_step:
+                    type: string
+  /v1/tenants:
+    get:
+      tags:
+      - Admin
+      summary: List tenants
+      security:
+      - adminAuth: []
+      responses:
+        '200':
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tenant'
+    post:
+      tags:
+      - Admin
+      summary: Create a tenant (returns its API key once)
+      security:
+      - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - id
+              properties:
+                id:
+                  type: string
+                  example: acme
+                name:
+                  type: string
+                  example: Acme Inc
+                tz:
+                  type: string
+                  example: UTC
+                  description: IANA timezone (default UTC)
+                daily_request_limit:
+                  type: integer
+                  example: 2000
+                  description: 0 = unlimited
+                pool_only_cap:
+                  type: boolean
+                  description: Count only shared-pool answers toward the cap
+                  default: false
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    $ref: '#/components/schemas/Tenant'
+                  api_key:
+                    type: string
+                    example: air_abc123...
+                  note:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/tenants/{id}/rotate-key:
+    post:
+      tags:
+      - Admin
+      summary: Rotate a tenant's API key
+      security:
+      - adminAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        example: acme
+      responses:
+        '200':
+          description: New key, shown once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewKey'
+  /v1/tenants/{id}:
+    patch:
+      tags:
+      - Admin
+      summary: Change a tenant's cap (or disable it)
+      security:
+      - adminAuth: []
+      description: Send any of the fields; those you leave out keep their value. Takes effect immediately.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        example: acme
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                daily_request_limit:
+                  type: integer
+                  example: 500
+                  description: 0 = unlimited
+                pool_only_cap:
+                  type: boolean
+                disabled:
+                  type: boolean
+            example:
+              daily_request_limit: 500
+              pool_only_cap: true
+      responses:
+        '200':
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/overview:
+    get:
+      tags:
+      - Native
+      summary: Everything for an app's AI page, in one call
+      description: The tenant, its cap, today's usage per model, the live state and reset time of its own models,
+        and the state of the shared models. Keys and other tenants' numbers are never included.
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    $ref: '#/components/schemas/Tenant'
+                  cap:
+                    $ref: '#/components/schemas/CapStatus'
+                  usage:
+                    $ref: '#/components/schemas/UsageReport'
+                  own:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderStatus'
+                  shared:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SharedModel'
+                  server_time:
+                    type: string
+                    format: date-time
+              example:
+                tenant:
+                  id: acme
+                  tz: UTC
+                  daily_request_limit: 50
+                  pool_only_cap: true
+                cap:
+                  limit: 50
+                  used: 12
+                  remaining: 38
+                  pool_only: true
+                  reached: false
+                  resets_in_seconds: 41200
+                  own_requests_today: 30
+                  pool_requests_today: 12
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/voices:
+    get:
+      tags:
+      - Voices
+      summary: List voices I can use
+      parameters:
+      - name: provider
+        in: query
+        schema:
+          type: string
+        description: Only this ElevenLabs provider (by name)
+      - name: search
+        in: query
+        schema:
+          type: string
+        description: Case-insensitive match on name, description, category or label
+      responses:
+        '200':
+          description: Voices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Voice'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ProvidersBusy'
+  /v1/voices/clone:
+    post:
+      tags:
+      - Voices
+      summary: Clone a voice from recordings (ElevenLabs Instant Voice Cloning)
+      description: Upload 1 to 25 clean recordings (max 12 MB each, 50 MB total). **You must confirm you have the
+        speaker's permission** (`consent=true`). A tenant clones inside its **own** ElevenLabs account (add one
+        with `me add -preset elevenlabs`); cloning in the shared account needs the operator to enable it. Max 10
+        clones per tenant by default. Instant cloning needs an ElevenLabs plan that includes it.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - name
+              - consent
+              - files
+              properties:
+                name:
+                  type: string
+                  example: Ali
+                  description: Max 100 characters
+                consent:
+                  type: boolean
+                  description: 'Must be true: you have the speaker''s permission or the rights'
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Repeat the field for each recording
+                description:
+                  type: string
+                labels:
+                  type: string
+                  example: '{"gender":"male"}'
+                  description: JSON object of strings
+                remove_background_noise:
+                  type: boolean
+                  description: Can make clean recordings worse
+                provider:
+                  type: string
+                  description: Pin one ElevenLabs provider by name
+      responses:
+        '201':
+          description: Cloned. Use `name` or `id` as `voice` in /v1/speak.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Voice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: No ElevenLabs key of your own, and cloning on the shared account is not enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/voices/{id}:
+    delete:
+      tags:
+      - Voices
+      summary: Delete a voice I cloned
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        '404':
+          $ref: '#/components/responses/VoiceNotFound'
+  /v1/embeddings:
+    post:
+      tags:
+      - OpenAI-compatible
+      summary: Text embeddings (OpenAI format)
+      description: 'Turns text into vectors with failover across embedding providers (category `embed`).
+
+
+        **For vector search read this:** vectors from different models, or of different sizes, cannot be compared.
+        Failover can switch models. Pin one model with `model` (a provider name or exact model id), and set `dimensions`
+        so a provider that answers with another size is skipped. Store `model` and `airouter.dimensions` with your
+        index. `gemini-embedding-001` returns **3072** numbers by default.
+
+
+        Up to 2000 texts per call (sent upstream in batches of 100 to the same provider). Empty texts are rejected.
+        `encoding_format` must be `float`.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - input
+              properties:
+                model:
+                  type: string
+                  default: auto
+                  description: '`auto` (router chooses and fails over), or a provider name / exact model id to pin
+                    one'
+                input:
+                  description: A string or a list of strings
+                  oneOf:
+                  - type: string
+                  - type: array
+                    items:
+                      type: string
+                dimensions:
+                  type: integer
+                  example: 768
+                  description: 'Exact vector size wanted. Sent upstream and enforced: other sizes are rejected and
+                    the next provider is tried'
+                encoding_format:
+                  type: string
+                  enum:
+                  - float
+            example:
+              model: gemini-embedding-001
+              input:
+              - first chunk
+              - second chunk
+              dimensions: 768
+      responses:
+        '200':
+          description: Embeddings, in input order
+          headers:
+            X-AIRouter-Provider:
+              schema:
+                type: string
+            X-AIRouter-Model:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        object:
+                          type: string
+                          example: embedding
+                        index:
+                          type: integer
+                        embedding:
+                          type: array
+                          items:
+                            type: number
+                  model:
+                    type: string
+                  usage:
+                    type: object
+                    properties:
+                      prompt_tokens:
+                        type: integer
+                      total_tokens:
+                        type: integer
+                    description: Estimated (about 4 characters per token)
+                  airouter:
+                    type: object
+                    properties:
+                      provider:
+                        type: string
+                      dimensions:
+                        type: integer
+                      own:
+                        type: boolean
+                      latency_ms:
+                        type: integer
+                      attempts:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Attempt'
+        '400':
+          $ref: '#/components/responses/OAIError'
+        '401':
+          $ref: '#/components/responses/OAIError'
+        '404':
+          $ref: '#/components/responses/OAIError'
+        '429':
+          $ref: '#/components/responses/OAIError'
+        '502':
+          $ref: '#/components/responses/OAIError'
+        '503':
+          $ref: '#/components/responses/OAIError'
+  /v1/voices/{id}/share:
+    post:
+      tags:
+      - Voices
+      summary: Share an operator voice with every tenant (admin)
+      security:
+      - adminAuth: []
+      description: By default a cloned voice is private. The operator can share a voice **it cloned** (as the default
+        tenant) so every tenant that can use that ElevenLabs provider can list and speak with it. Tenants' own clones
+        can never be shared. Usage is billed to the ElevenLabs account the voice lives in. Send `{"shared":false}`
+        to make it private again (effective at once).
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - shared
+              properties:
+                shared:
+                  type: boolean
+            example:
+              shared: true
+      responses:
+        '200':
+          description: Done
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  shared:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/VoiceNotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Tenant API key (`air_...`). `X-API-Key` header is also accepted.
+    adminAuth:
+      type: http
+      scheme: bearer
+      description: Value of `AIROUTER_ADMIN_TOKEN`
+  parameters:
+    ProviderId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: Provider id (see `provider list`)
+    MaxWait:
+      name: max_wait
+      in: query
+      required: false
+      description: 'How long to wait for a briefly rate-limited provider before failing over, e.g. `5s` or `5` (seconds).
+        Max 2 minutes. Default: the server''s setting (20s).'
+      schema:
+        type: string
+        example: 5s
+  responses:
+    BadRequest:
+      description: Request is invalid. Fix it; do not retry as-is.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Tenant disabled, or admin API disabled (no AIROUTER_ADMIN_TOKEN set)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not found (also returned when the id belongs to someone else)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TenantLimit:
+      description: Your tenant's daily request cap is used up
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until reset
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'airouter: tenant daily request limit reached'
+            retry_after_seconds: 3600
+    UpstreamFailed:
+      description: Providers were tried and all failed; see `attempts`
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'airouter: all providers failed: groq: HTTP 500'
+            attempts:
+            - provider: groq-openai/gpt-oss-120b
+              error: HTTP 500
+              status: 500
+              kind: transient
+    ProvidersBusy:
+      description: Every provider is limited or cooling down. Retry after `Retry-After`.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'airouter: all providers are limited right now (retry in 34s)'
+            retry_after_seconds: 35
+            reasons:
+              groq-openai/gpt-oss-120b: cooling down
+    Timeout:
+      description: Whole request timed out (default 2 minutes)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    OAIError:
+      description: OpenAI-style error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAIError'
+    VoiceNotFound:
+      description: No such voice for this tenant (also for another tenant's voice)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        retry_after_seconds:
+          type: integer
+        reasons:
+          type: object
+          additionalProperties:
+            type: string
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+    OAIError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+              example: providers_busy
+            code:
+              type: integer
+              example: 503
+            param:
+              nullable: true
+        airouter:
+          type: object
+          description: Extra routing info (retry_after_seconds, reasons, attempts)
+          additionalProperties: true
+    Attempt:
+      type: object
+      description: A provider that was tried and failed before the successful one. `status` and `kind` are filled
+        for text, speech, transcription and embeddings.
+      properties:
+        provider:
+          type: string
+        error:
+          type: string
+        status:
+          type: integer
+          description: Upstream HTTP status, if any
+        kind:
+          type: string
+          enum:
+          - auth
+          - rate_limit
+          - daily_limit
+          - billing
+          - bad_request
+          - timeout
+          - transient
+          - bad_response
+    Message:
+      type: object
+      required:
+      - role
+      - content
+      properties:
+        role:
+          type: string
+          enum:
+          - system
+          - user
+          - assistant
+        content:
+          type: string
+    GenerateRequest:
+      type: object
+      description: Send `prompt` or `messages` (one of them is required).
+      properties:
+        prompt:
+          type: string
+          description: The user prompt
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+          description: Alternative to `prompt`
+        system:
+          type: string
+          description: System prompt (optional)
+        json:
+          type: boolean
+          description: Ask for a JSON answer and validate it; fails over if the model returns junk
+        max_tokens:
+          type: integer
+        temperature:
+          type: number
+        provider:
+          type: string
+          description: Pin one provider by name (see provider list)
+        strategy:
+          type: string
+          enum:
+          - priority
+          - spread
+          description: priority (default) tries lowest priority number first; spread balances load
+    GenerateResponse:
+      type: object
+      properties:
+        text:
+          type: string
+        json:
+          description: Parsed JSON (only when request had json:true)
+        provider:
+          type: string
+        model:
+          type: string
+        tokens:
+          type: integer
+        latency_ms:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+          description: Providers that failed before this one
+        own: &id002
+          type: boolean
+          description: true when the tenant's OWN key answered (free under a pool-only cap)
+    SpeakRequest:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        voice:
+          type: string
+          description: 'Voice id OR voice name. Defaults: `Kore` (Gemini), `tara` (Groq Orpheus English), `hassan`
+            (Orpheus Arabic). **ElevenLabs:** a voice id or a name (case-insensitive) of a voice you can use, including
+            your own clones; empty = the first ready-made voice.'
+        format:
+          type: string
+          enum:
+          - wav
+          - mp3
+          - opus
+          - ogg
+          - pcm
+          default: wav
+          description: '**Audio** format. `mp3`/`opus` are made natively by ElevenLabs; for Groq and Gemini airouter
+            converts the WAV with ffmpeg (if ffmpeg is missing you get WAV back and `format` says so). `opus` is
+            mono Ogg/Opus: what WhatsApp and Telegram voice notes need.'
+        language:
+          type: string
+          example: en
+        provider:
+          type: string
+        model:
+          type: string
+          example: eleven_flash_v2_5
+          description: 'ElevenLabs only: model for this request (default: the provider''s model)'
+        voice_settings:
+          $ref: '#/components/schemas/VoiceSettings'
+    SpeakResponse:
+      type: object
+      description: Returned when `?format=json`
+      properties:
+        audio_base64:
+          type: string
+        content_type:
+          type: string
+          example: audio/wav
+        format:
+          type: string
+          example: wav
+        provider:
+          type: string
+        model:
+          type: string
+        voice:
+          type: string
+        latency_ms:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+        own: *id002
+    TranscribeResponse:
+      type: object
+      properties:
+        text:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        language:
+          type: string
+        latency_ms:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+        own: *id002
+    ChatCompletionRequest:
+      type: object
+      required:
+      - messages
+      properties:
+        model:
+          type: string
+          default: auto
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum:
+                - system
+                - developer
+                - user
+                - assistant
+              content:
+                description: A string, or an array of `{type:"text", text:"..."}` parts
+                oneOf:
+                - type: string
+                - type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        example: text
+                      text:
+                        type: string
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+        max_completion_tokens:
+          type: integer
+        stream:
+          type: boolean
+          description: Buffered streaming (see description)
+        response_format:
+          type: object
+          properties:
+            type:
+              type: string
+              enum:
+              - text
+              - json_object
+              - json_schema
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: chatcmpl-air-1a2b3c
+        object:
+          type: string
+          example: chat.completion
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              finish_reason:
+                type: string
+                example: stop
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                    example: assistant
+                  content:
+                    type: string
+        usage:
+          type: object
+          description: Only `total_tokens` is filled in; prompt/completion are 0
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+        airouter:
+          type: object
+          properties:
+            provider:
+              type: string
+            latency_ms:
+              type: integer
+            attempts:
+              type: array
+              items:
+                $ref: '#/components/schemas/Attempt'
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        tz:
+          type: string
+        daily_request_limit:
+          type: integer
+          description: Daily request cap. 0 = unlimited.
+        disabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        pool_only_cap:
+          type: boolean
+          description: When true the daily cap counts only answers from the shared pool. Requests served by the
+            tenant's own keys are free and still work after the cap is reached.
+    NewKey:
+      type: object
+      properties:
+        tenant:
+          type: string
+        api_key:
+          type: string
+        note:
+          type: string
+    Preset:
+      type: object
+      description: Connection defaults for a provider preset (field names are Go-style, e.g. Kind, BaseURL)
+      additionalProperties: true
+    ProviderInput:
+      type: object
+      description: Use `preset` to fill defaults from the catalog, then override anything.
+      required:
+      - model
+      properties:
+        preset:
+          type: string
+          example: groq
+          description: groq, gemini, gemma, gemini-tts, elevenlabs, openrouter, mistral, zai, sambanova, huggingface,
+            ollama, ollama-remote, openai
+        name:
+          type: string
+          description: Unique name (default preset-model)
+        kind:
+          type: string
+          enum:
+          - openai
+          - ollama
+        base_url:
+          type: string
+        api_key:
+          type: string
+          description: Stored encrypted, never returned
+        api_key_env:
+          type: string
+          description: Env var holding the key (admin only; tenants cannot use it)
+        model:
+          type: string
+          description: Exact model id from the provider console
+        category:
+          type: string
+          enum:
+          - text
+          - tts
+          - stt
+          - embed
+          default: text
+          description: Which request shape the model expects. `embed` = embeddings (`/v1/embeddings`).
+        priority:
+          type: integer
+          description: Lower is tried first (default 100)
+        rpm:
+          type: integer
+          description: Requests per minute, 0 = no local cap
+        rpd:
+          type: integer
+          description: Requests per day
+        tpm:
+          type: integer
+          description: Tokens per minute
+        ash:
+          type: integer
+          description: Audio seconds per hour (TTS/STT)
+        asd:
+          type: integer
+          description: Audio seconds per day (TTS/STT)
+        workers:
+          type: integer
+          description: Max concurrent requests (default 2)
+        reset_tz:
+          type: string
+          example: America/Los_Angeles
+          description: Timezone where the daily quota resets (default UTC)
+        json_mode:
+          type: boolean
+          description: false if the model rejects response_format (e.g. Gemma)
+        system_role:
+          type: boolean
+          description: false if the model rejects system messages (e.g. Gemma)
+        used_today_hint:
+          type: integer
+          description: Requests already used today (only when adding)
+        tenant_id:
+          type: string
+          description: Admin only. Restrict to one tenant; empty means shared
+    ProviderConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        tenant_id:
+          type: string
+        kind:
+          type: string
+        base_url:
+          type: string
+        model:
+          type: string
+        priority:
+          type: integer
+        rpm:
+          type: integer
+        rpd:
+          type: integer
+        tpm:
+          type: integer
+        ash:
+          type: integer
+        asd:
+          type: integer
+        workers:
+          type: integer
+        reset_tz:
+          type: string
+        json_mode:
+          type: boolean
+        system_role:
+          type: boolean
+        category:
+          type: string
+        disabled:
+          type: boolean
+    ProviderStatus:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        tenant_id:
+          type: string
+        base_url:
+          type: string
+        workers:
+          type: integer
+        kind:
+          type: string
+        model:
+          type: string
+        preset:
+          type: string
+        category:
+          type: string
+          enum:
+          - text
+          - tts
+          - stt
+        priority:
+          type: integer
+        state:
+          type: string
+          description: 'ok | disabled | no api key | cooling down | daily request limit reached | paused: <reason>'
+        used_today:
+          type: integer
+        tokens_today:
+          type: integer
+        audio_seconds_today:
+          type: integer
+        rpd:
+          type: integer
+        rpm:
+          type: integer
+        tpm:
+          type: integer
+        ash:
+          type: integer
+        asd:
+          type: integer
+        requests_last_minute:
+          type: integer
+        reset_tz:
+          type: string
+        resets_in_seconds:
+          type: integer
+        has_key:
+          type: boolean
+        limits_source:
+          type: string
+          enum:
+          - reported
+          - config
+        key_source:
+          type: string
+          enum:
+          - env
+          - db
+          - none
+          - not needed
+        key_hint:
+          type: string
+          example: …a1b2
+        upstream:
+          type: object
+          additionalProperties: true
+          description: What the provider itself last reported about its limits
+        remaining_today:
+          type: integer
+    SharedModel:
+      type: object
+      properties:
+        name:
+          type: string
+        model:
+          type: string
+        category:
+          type: string
+        state:
+          type: string
+        resets_in_seconds:
+          type: integer
+          description: Seconds until this model's quota resets
+    UsageReport:
+      type: object
+      properties:
+        tenant:
+          type: string
+        requests_today:
+          type: integer
+        tokens_today:
+          type: integer
+        tenant_daily_limit:
+          type: integer
+        providers:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+              model:
+                type: string
+              day:
+                type: string
+              tenant_requests:
+                type: integer
+              tenant_tokens:
+                type: integer
+              tenant_errors:
+                type: integer
+              all_tenants_requests:
+                type: integer
+              limit_per_day:
+                type: integer
+    CatalogModel:
+      type: object
+      properties:
+        preset:
+          type: string
+        model:
+          type: string
+        category:
+          type: string
+        rpm:
+          type: integer
+        rpd:
+          type: integer
+        tpm:
+          type: integer
+        notes:
+          type: string
+        verified_on:
+          type: string
+        added:
+          type: boolean
+    AddedSkipped:
+      type: object
+      properties:
+        added:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            type: string
+    VoiceSettings:
+      type: object
+      description: ElevenLabs only. Leave a field out to keep the voice's saved value.
+      properties:
+        stability:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Lower = more expressive
+        similarity_boost:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Higher = closer to the original voice
+        style:
+          type: number
+          minimum: 0
+          maximum: 1
+        speed:
+          type: number
+          description: About 0.7 to 1.2
+        use_speaker_boost:
+          type: boolean
+    CapStatus:
+      type: object
+      properties:
+        limit:
+          type: integer
+          description: 0 = unlimited
+        used:
+          type: integer
+          description: What counts toward the cap today
+        remaining:
+          type: integer
+          description: -1 when unlimited
+        pool_only:
+          type: boolean
+        reached:
+          type: boolean
+        resets_in_seconds:
+          type: integer
+        own_requests_today:
+          type: integer
+        pool_requests_today:
+          type: integer
+    Voice:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 21m00Tcm4TlvDq8ikWAM
+        name:
+          type: string
+        category:
+          type: string
+          example: premade
+          description: premade, cloned, generated, professional ...
+        description:
+          type: string
+        preview_url:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            gender: female
+            accent: american
+        provider:
+          type: string
+          description: The provider (ElevenLabs account) the voice lives in
+        own:
+          type: boolean
+          description: Lives in the tenant's own ElevenLabs account
+        cloned:
+          type: boolean
+          description: Cloned through airouter by this tenant
+        requires_verification:
+          type: boolean
+        shared:
+          type: boolean
+          description: An operator voice the operator shares with every tenant

@@ -44,6 +44,12 @@ func mapErr(err error) (code int, typ string, extra map[string]any) {
 		return 401, "unauthorized", nil
 	case errors.Is(err, types.ErrTenantDisabled):
 		return 403, "forbidden", nil
+	case errors.Is(err, types.ErrVoiceNotFound):
+		return 404, "voice_not_found", nil
+	case errors.Is(err, types.ErrConsentRequired):
+		return 400, "consent_required", nil
+	case errors.Is(err, types.ErrVoiceCloneNotAllowed):
+		return 403, "forbidden", nil
 	case errors.Is(err, types.ErrNotFound):
 		return 404, "not_found", nil
 	case errors.Is(err, context.Canceled):

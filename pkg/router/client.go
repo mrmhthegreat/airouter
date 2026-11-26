@@ -97,11 +97,15 @@ func (r *Router) callProvider(ctx context.Context, p types.ProviderConfig, msgs 
 	} else {
 		url = p.BaseURL + "/chat/completions"
 		body = map[string]any{"model": p.Model, "messages": msgs}
-		if req.Temperature != nil {
+		if req.Temperature != nil && !openAIFixedTemperature(p) {
 			body["temperature"] = *req.Temperature
 		}
 		if req.MaxTokens > 0 {
-			body["max_tokens"] = req.MaxTokens
+			if isOpenAI(p) {
+				body["max_completion_tokens"] = req.MaxTokens // max_tokens is deprecated, and reasoning models reject it
+			} else {
+				body["max_tokens"] = req.MaxTokens
+			}
 		}
 		if req.JSON && p.UseJSONMode() {
 			body["response_format"] = map[string]string{"type": "json_object"}
@@ -182,4 +186,22 @@ func extractJSON(s string) (json.RawMessage, bool) {
 		}
 	}
 	return nil, false
+}
+
+// isOpenAI reports whether the provider is OpenAI's own API.
+func isOpenAI(p types.ProviderConfig) bool { return strings.Contains(p.BaseURL, "api.openai.com") }
+
+// openAIFixedTemperature: OpenAI's reasoning models (o1, o3, o4, gpt-5 families)
+// only accept the default temperature and answer HTTP 400 when one is sent.
+func openAIFixedTemperature(p types.ProviderConfig) bool {
+	if !isOpenAI(p) {
+		return false
+	}
+	m := strings.ToLower(p.Model)
+	for _, pre := range []string{"o1", "o3", "o4", "gpt-5"} {
+		if strings.HasPrefix(m, pre) {
+			return true
+		}
+	}
+	return false
 }

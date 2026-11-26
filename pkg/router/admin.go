@@ -53,7 +53,7 @@ func (r *Router) Authenticate(ctx context.Context, key string) (*types.Tenant, e
 
 // UpdateTenantProfile lets a tenant change its own display name and timezone.
 // Quota (daily_request_limit) and the disabled flag are operator-only and are
-// deliberately not changeable here.
+// deliberately not changeable here; use UpdateTenantCap (operator side).
 func (r *Router) UpdateTenantProfile(ctx context.Context, id, name, tz string) (*types.Tenant, error) {
 	t, err := r.store.TenantByID(ctx, id)
 	if err != nil {
@@ -288,4 +288,21 @@ func (r *Router) BootstrapProvidersOpts(ctx context.Context, o BootstrapOptions)
 		added = append(added, cfg.Name)
 	}
 	return added, skipped, nil
+}
+
+// UpdateTenantCap changes a tenant's daily request cap at any time (for
+// example when its plan changes). poolOnly makes the cap count only requests
+// served by the shared pool, so the tenant's own provider keys are free. The
+// change applies to the next request. Operator-side call.
+func (r *Router) UpdateTenantCap(ctx context.Context, id string, dailyLimit int, poolOnly, disabled bool) (*types.Tenant, error) {
+	if dailyLimit < 0 {
+		return nil, errors.New("daily limit cannot be negative")
+	}
+	if err := r.store.UpdateTenantCap(ctx, id, dailyLimit, poolOnly, disabled); err != nil {
+		if errors.Is(err, types.ErrNotFound) {
+			return nil, types.ErrUnknownTenant
+		}
+		return nil, err
+	}
+	return r.store.TenantByID(ctx, id)
 }

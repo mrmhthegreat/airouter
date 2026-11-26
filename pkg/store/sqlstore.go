@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS usage(
   requests INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(tenant_id, provider_id, day));
 CREATE INDEX IF NOT EXISTS usage_provider_day ON usage(provider_id, day);
-CREATE TABLE IF NOT EXISTS provider_pause(provider_id INTEGER PRIMARY KEY, until TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '');`
+CREATE TABLE IF NOT EXISTS provider_pause(provider_id INTEGER PRIMARY KEY, until TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS voices(
+  voice_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, provider_id INTEGER NOT NULL,
+  name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS voices_tenant ON voices(tenant_id);`
 
 // NewSQLStore runs the schema migration and returns a ready store. It also pins
 // the connection pool to a single open connection, which is the right setting
@@ -56,6 +60,16 @@ func NewSQLStore(db *sql.DB) (*SQLStore, error) {
 		"asd":      "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return nil, fmt.Errorf("migrate columns: %w", err)
+	}
+	if err := migrateColumns(db, "tenants", map[string]string{
+		"pool_only_cap": "INTEGER NOT NULL DEFAULT 0",
+	}); err != nil {
+		return nil, fmt.Errorf("migrate tenant columns: %w", err)
+	}
+	if err := migrateColumns(db, "voices", map[string]string{
+		"shared": "INTEGER NOT NULL DEFAULT 0",
+	}); err != nil {
+		return nil, fmt.Errorf("migrate voice columns: %w", err)
 	}
 	return &SQLStore{db: db}, nil
 }
@@ -122,8 +136,8 @@ func (s *SQLStore) CreateTenant(ctx context.Context, t types.Tenant, keyHash str
 		t.CreatedAt = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tenants(id,name,api_key_hash,tz,daily_request_limit,disabled,created_at) VALUES(?,?,?,?,?,?,?)`,
-		t.ID, t.Name, keyHash, t.TZ, t.DailyRequestLimit, b2i(t.Disabled), t.CreatedAt.Format(time.RFC3339))
+		`INSERT INTO tenants(id,name,api_key_hash,tz,daily_request_limit,pool_only_cap,disabled,created_at) VALUES(?,?,?,?,?,?,?,?)`,
+		t.ID, t.Name, keyHash, t.TZ, t.DailyRequestLimit, b2i(t.PoolOnlyCap), b2i(t.Disabled), t.CreatedAt.Format(time.RFC3339))
 	return err
 }
 
@@ -136,6 +150,25 @@ func (s *SQLStore) UpdateTenantProfile(ctx context.Context, id, name, tz string)
 		return types.ErrNotFound
 	}
 	return nil
+}
+
+func (s *SQLStore) UpdateTenantCap(ctx context.Context, id string, dailyLimit int, poolOnly, disabled bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE tenants SET daily_request_limit=?, pool_only_cap=?, disabled=? WHERE id=?`,
+		dailyLimit, b2i(poolOnly), b2i(disabled), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLStore) TenantPoolDayUsage(ctx context.Context, tenant, day string) (int, error) {
+	var r int
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(CASE WHEN u.requests > u.errors THEN u.requests - u.errors ELSE 0 END),0) FROM usage u
+		JOIN providers p ON p.id = u.provider_id WHERE u.tenant_id=? AND u.day=? AND p.tenant_id=''`, tenant, day).Scan(&r)
+	return r, err
 }
 
 func (s *SQLStore) UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error {
@@ -151,20 +184,21 @@ func (s *SQLStore) UpdateTenantKeyHash(ctx context.Context, id, keyHash string) 
 
 func scanTenant(row interface{ Scan(...any) error }) (*types.Tenant, error) {
 	var t types.Tenant
-	var dis int
+	var dis, pool int
 	var created string
-	if err := row.Scan(&t.ID, &t.Name, &t.TZ, &t.DailyRequestLimit, &dis, &created); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &t.TZ, &t.DailyRequestLimit, &pool, &dis, &created); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 	t.Disabled = dis != 0
+	t.PoolOnlyCap = pool != 0
 	t.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	return &t, nil
 }
 
-const tenantCols = `id,name,tz,daily_request_limit,disabled,created_at`
+const tenantCols = `id,name,tz,daily_request_limit,pool_only_cap,disabled,created_at`
 
 func (s *SQLStore) TenantByID(ctx context.Context, id string) (*types.Tenant, error) {
 	return scanTenant(s.db.QueryRowContext(ctx, `SELECT `+tenantCols+` FROM tenants WHERE id=?`, id))
@@ -295,4 +329,73 @@ func (s *SQLStore) TenantDayUsage(ctx context.Context, tenant, day string) (int,
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(requests),0) FROM usage WHERE tenant_id=? AND day=?`, tenant, day).Scan(&r)
 	return r, err
+}
+
+func (s *SQLStore) SaveVoice(ctx context.Context, v types.VoiceRecord) error {
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO voices(voice_id,tenant_id,provider_id,name,description,created_at,shared) VALUES(?,?,?,?,?,?,?)
+		ON CONFLICT(voice_id) DO UPDATE SET tenant_id=excluded.tenant_id, provider_id=excluded.provider_id, name=excluded.name, description=excluded.description`,
+		v.VoiceID, v.TenantID, v.ProviderID, v.Name, v.Description, v.CreatedAt.Format(time.RFC3339), b2i(v.Shared))
+	return err
+}
+
+func scanVoice(row interface{ Scan(...any) error }) (*types.VoiceRecord, error) {
+	var v types.VoiceRecord
+	var created string
+	var shared int
+	if err := row.Scan(&v.VoiceID, &v.TenantID, &v.ProviderID, &v.Name, &v.Description, &created, &shared); err != nil {
+		return nil, err
+	}
+	v.Shared = shared != 0
+	v.CreatedAt, _ = time.Parse(time.RFC3339, created)
+	return &v, nil
+}
+
+const voiceCols = `voice_id,tenant_id,provider_id,name,description,created_at,shared`
+
+func (s *SQLStore) VoiceByID(ctx context.Context, voiceID string) (*types.VoiceRecord, error) {
+	v, err := scanVoice(s.db.QueryRowContext(ctx, `SELECT `+voiceCols+` FROM voices WHERE voice_id=?`, voiceID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return v, err
+}
+
+func (s *SQLStore) ListVoices(ctx context.Context, tenantID string) ([]types.VoiceRecord, error) {
+	q, args := `SELECT `+voiceCols+` FROM voices ORDER BY created_at, voice_id`, []any{}
+	if tenantID != "" {
+		q, args = `SELECT `+voiceCols+` FROM voices WHERE tenant_id=? ORDER BY created_at, voice_id`, []any{tenantID}
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []types.VoiceRecord
+	for rows.Next() {
+		v, err := scanVoice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) SetVoiceShared(ctx context.Context, voiceID string, shared bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE voices SET shared=? WHERE voice_id=?`, b2i(shared), voiceID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return types.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLStore) DeleteVoice(ctx context.Context, voiceID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM voices WHERE voice_id=?`, voiceID)
+	return err
 }

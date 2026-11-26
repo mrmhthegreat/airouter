@@ -30,7 +30,26 @@ type Store interface {
 	TenantByKeyHash(ctx context.Context, hash string) (*types.Tenant, error)
 	ListTenants(ctx context.Context) ([]types.Tenant, error)
 	UpdateTenantProfile(ctx context.Context, id, name, tz string) error // self-service: only name and timezone
-	UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error  // rotate: old key stops working; types.ErrNotFound if no such tenant
+	// UpdateTenantCap changes the daily request cap and what it counts, and
+	// can disable the tenant. types.ErrNotFound if there is no such tenant.
+	UpdateTenantCap(ctx context.Context, id string, dailyLimit int, poolOnly, disabled bool) error
+	// TenantPoolDayUsage counts only requests that shared-pool providers
+	// (providers without a tenant of their own) served successfully for the
+	// tenant on that day. Failed attempts are not counted, so a provider outage
+	// does not use up the tenant's cap.
+	TenantPoolDayUsage(ctx context.Context, tenantID, day string) (requests int, err error)
+	UpdateTenantKeyHash(ctx context.Context, id, keyHash string) error // rotate: old key stops working; types.ErrNotFound if no such tenant
+
+	// Voices ---------------------------------------------------------------
+	// SaveVoice records a cloned voice (insert or update by VoiceID).
+	SaveVoice(ctx context.Context, v types.VoiceRecord) error
+	// VoiceByID returns the record for a voice id, or nil when airouter did not clone it.
+	VoiceByID(ctx context.Context, voiceID string) (*types.VoiceRecord, error)
+	// ListVoices returns cloned-voice records; tenantID "" means every tenant.
+	ListVoices(ctx context.Context, tenantID string) ([]types.VoiceRecord, error)
+	DeleteVoice(ctx context.Context, voiceID string) error
+	// SetVoiceShared flips VoiceRecord.Shared; types.ErrNotFound if airouter did not clone the voice.
+	SetVoiceShared(ctx context.Context, voiceID string, shared bool) error
 
 	// Providers -----------------------------------------------------------
 	SaveProvider(ctx context.Context, p *types.ProviderConfig) error // insert (ID==0) or update; sets p.ID
@@ -94,6 +113,7 @@ type MemoryStore struct {
 	nextID    int64
 	usage     map[usageKey]usageVal
 	pauses    map[int64]pauseVal
+	voices    map[string]types.VoiceRecord
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -104,6 +124,7 @@ func NewMemoryStore() *MemoryStore {
 		providers: map[int64]types.ProviderConfig{},
 		usage:     map[usageKey]usageVal{},
 		pauses:    map[int64]pauseVal{},
+		voices:    map[string]types.VoiceRecord{},
 	}
 }
 
@@ -130,6 +151,35 @@ func (m *MemoryStore) UpdateTenantProfile(_ context.Context, id, name, tz string
 	t.Name, t.TZ = name, tz
 	m.tenants[id] = t
 	return nil
+}
+
+func (m *MemoryStore) UpdateTenantCap(_ context.Context, id string, dailyLimit int, poolOnly, disabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tenants[id]
+	if !ok {
+		return types.ErrNotFound
+	}
+	t.DailyRequestLimit, t.PoolOnlyCap, t.Disabled = dailyLimit, poolOnly, disabled
+	m.tenants[id] = t
+	return nil
+}
+
+func (m *MemoryStore) TenantPoolDayUsage(_ context.Context, tenant, day string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for k, v := range m.usage {
+		if k.tenant != tenant || k.day != day {
+			continue
+		}
+		if p, ok := m.providers[k.pid]; ok && p.TenantID == "" {
+			if served := v.req - v.errs; served > 0 {
+				n += served
+			}
+		}
+	}
+	return n, nil
 }
 
 func (m *MemoryStore) UpdateTenantKeyHash(_ context.Context, id, keyHash string) error {
@@ -273,3 +323,54 @@ func (m *MemoryStore) Close() error { return nil }
 
 // ErrNotFound is exported for callers that need to compare against it.
 var ErrNotFound = errors.New("not found")
+
+func (m *MemoryStore) SaveVoice(_ context.Context, v types.VoiceRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = time.Now().UTC()
+	}
+	m.voices[v.VoiceID] = v
+	return nil
+}
+
+func (m *MemoryStore) VoiceByID(_ context.Context, voiceID string) (*types.VoiceRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v, ok := m.voices[voiceID]; ok {
+		return &v, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) ListVoices(_ context.Context, tenantID string) ([]types.VoiceRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []types.VoiceRecord
+	for _, v := range m.voices {
+		if tenantID == "" || v.TenantID == tenantID {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *MemoryStore) SetVoiceShared(_ context.Context, voiceID string, shared bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.voices[voiceID]
+	if !ok {
+		return types.ErrNotFound
+	}
+	v.Shared = shared
+	m.voices[voiceID] = v
+	return nil
+}
+
+func (m *MemoryStore) DeleteVoice(_ context.Context, voiceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.voices, voiceID)
+	return nil
+}

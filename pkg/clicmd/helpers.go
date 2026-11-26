@@ -112,3 +112,22 @@ func FormatCategoriesLabel(cats []string) string {
 	}
 	return strings.Join(cats, ", ")
 }
+
+// parseInterspersed parses flags that appear before OR after positional
+// arguments, so both `tenant add acme -limit 5` and `tenant add -limit 5 acme`
+// work. (Go's flag package stops at the first positional argument and would
+// silently ignore the rest.) After it returns, fs.Args() holds only the
+// positional arguments, in order.
+func parseInterspersed(fs *flag.FlagSet, args []string) error {
+	var pos []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		args = fs.Args()
+		if len(args) > 0 {
+			pos, args = append(pos, args[0]), args[1:]
+		}
+	}
+	return fs.Parse(pos) // no flags left: this just sets fs.Args() to the positionals
+}

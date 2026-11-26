@@ -283,6 +283,58 @@ func (s *apiServer) audioSpeech(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(resp.Audio)
 }
 
+// embeddings adapts OpenAI's {model,input,dimensions} to Embed. "input" is one
+// string or a list of strings (token arrays are not supported).
+func (s *apiServer) embeddings(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.resolveTenantOAI(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Model          string          `json:"model"`
+		Input          json.RawMessage `json:"input"`
+		Dimensions     int             `json:"dimensions"`
+		EncodingFormat string          `json:"encoding_format"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&in); err != nil {
+		writeOAIErr(w, 400, "bad_request", "invalid JSON body: "+err.Error(), nil)
+		return
+	}
+	if in.EncodingFormat != "" && in.EncodingFormat != "float" {
+		writeOAIErr(w, 400, "bad_request", `only encoding_format "float" is supported`, nil)
+		return
+	}
+	var texts []string
+	var one string
+	if err := json.Unmarshal(in.Input, &one); err == nil {
+		texts = []string{one}
+	} else if err := json.Unmarshal(in.Input, &texts); err != nil {
+		writeOAIErr(w, 400, "bad_request", `"input" must be a string or a list of strings`, nil)
+		return
+	}
+	prov, found := s.resolveModel(r, t.ID, in.Model, types.CategoryEmbed)
+	if !found {
+		writeOAIErr(w, 404, "model_not_found", fmt.Sprintf("embedding model %q not found", in.Model), nil)
+		return
+	}
+	resp, err := s.r.Embed(r.Context(), types.EmbedRequest{TenantID: t.ID, Texts: texts, Provider: prov, Dimensions: in.Dimensions, MaxWait: maxWaitParam(r)})
+	if err != nil {
+		writeOAIRouterErr(w, err)
+		return
+	}
+	data := make([]map[string]any, len(resp.Vectors))
+	for i, v := range resp.Vectors {
+		data[i] = map[string]any{"object": "embedding", "index": i, "embedding": v}
+	}
+	w.Header().Set("X-AIRouter-Provider", resp.Provider)
+	w.Header().Set("X-AIRouter-Model", resp.Model)
+	writeJSON(w, 200, map[string]any{
+		"object": "list", "data": data, "model": resp.Model,
+		"usage":    map[string]int{"prompt_tokens": resp.Tokens, "total_tokens": resp.Tokens},
+		"airouter": map[string]any{"provider": resp.Provider, "dimensions": resp.Dimensions, "own": resp.Own, "latency_ms": resp.LatencyMS, "attempts": resp.Attempts},
+	})
+}
+
 // resolveTenantOAI is resolveTenant with OpenAI-shaped 401/403 errors.
 func (s *apiServer) resolveTenantOAI(w http.ResponseWriter, r *http.Request) (*types.Tenant, bool) {
 	if s.isAdmin(r) {

@@ -76,6 +76,11 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 	mux.HandleFunc("POST /v1/transcribe", srv.transcribe)
 	mux.HandleFunc("GET /v1/usage", srv.usage)
 	mux.HandleFunc("GET /v1/whoami", srv.whoami)
+	mux.HandleFunc("GET /v1/overview", srv.overview)
+	mux.HandleFunc("GET /v1/voices", srv.listVoices)
+	mux.HandleFunc("POST /v1/voices/clone", srv.cloneVoice)
+	mux.HandleFunc("DELETE /v1/voices/{id}", srv.deleteVoice)
+	mux.HandleFunc("POST /v1/voices/{id}/share", srv.adminOnly(srv.shareVoice))
 	srv.registerMe(mux) // tenant self-service: own models, keys, limits
 
 	// OpenAI-compatible surface: point any OpenAI SDK / editor plugin at
@@ -83,6 +88,7 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", srv.chatCompletions)
 	mux.HandleFunc("GET /v1/models", srv.models)
 	mux.HandleFunc("POST /v1/audio/speech", srv.audioSpeech)
+	mux.HandleFunc("POST /v1/embeddings", srv.embeddings)
 	mux.HandleFunc("POST /v1/audio/transcriptions", srv.transcribe)
 
 	// Built-in web UI (chat, usage, API help, admin).
@@ -96,6 +102,7 @@ func NewHandler(r *router.Router, adminToken string) http.Handler {
 
 	mux.HandleFunc("GET /v1/tenants", srv.adminOnly(srv.listTenants))
 	mux.HandleFunc("POST /v1/tenants", srv.adminOnly(srv.createTenant))
+	mux.HandleFunc("PATCH /v1/tenants/{id}", srv.adminOnly(srv.updateTenantCap))
 	mux.HandleFunc("POST /v1/tenants/{id}/rotate-key", srv.adminOnly(srv.rotateTenantKey))
 
 	return mux
@@ -195,6 +202,7 @@ func (s *apiServer) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.TenantID = t.ID // callers can't spoof another tenant
+	req.MaxWait = maxWaitParam(r)
 	resp, err := s.r.Generate(r.Context(), req)
 	if err != nil {
 		writeRouterErr(w, err)
@@ -245,6 +253,7 @@ func (s *apiServer) speak(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.TenantID = t.ID
+	req.MaxWait = maxWaitParam(r)
 	resp, err := s.r.Speak(r.Context(), req)
 	if err != nil {
 		writeSpeakTranscribeError(w, err)
@@ -302,6 +311,7 @@ func (s *apiServer) transcribe(w http.ResponseWriter, r *http.Request) {
 		Language: r.FormValue("language"),
 		Prompt:   r.FormValue("prompt"),
 		Provider: r.FormValue("provider"),
+		MaxWait:  maxWaitParam(r),
 	}
 	resp, err := s.r.Transcribe(r.Context(), req)
 	if err != nil {
@@ -518,4 +528,87 @@ func (s *apiServer) whoami(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"role": role, "tenant": t})
+}
+
+// maxWaitParam reads ?max_wait=5s (or just 5 = seconds): how long to wait for a
+// briefly rate-limited provider before failing. Absent or invalid = router default.
+// Capped at 2 minutes.
+func maxWaitParam(r *http.Request) time.Duration {
+	v := strings.TrimSpace(r.URL.Query().Get("max_wait"))
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		n, nerr := strconv.Atoi(v)
+		if nerr != nil {
+			return 0
+		}
+		d = time.Duration(n) * time.Second
+	}
+	if d < 0 {
+		return 0
+	}
+	if d > 2*time.Minute {
+		d = 2 * time.Minute
+	}
+	return d
+}
+
+// overview returns cap, usage and live provider status for the caller's tenant in one call.
+func (s *apiServer) overview(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	ov, err := s.r.TenantOverview(r.Context(), t.ID)
+	if err != nil {
+		writeRouterErr(w, err)
+		return
+	}
+	writeJSON(w, 200, ov)
+}
+
+// updateTenantCap handles PATCH /v1/tenants/{id}. Send any of daily_request_limit,
+// pool_only_cap, disabled; fields you leave out keep their current value.
+func (s *apiServer) updateTenantCap(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		DailyRequestLimit *int  `json:"daily_request_limit"`
+		PoolOnlyCap       *bool `json:"pool_only_cap"`
+		Disabled          *bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+		writeErr(w, 400, "invalid JSON body: "+err.Error(), nil)
+		return
+	}
+	id := r.PathValue("id")
+	cur, err := s.r.Store().TenantByID(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, err.Error(), nil)
+		return
+	}
+	if cur == nil {
+		writeErr(w, 404, "no such tenant", nil)
+		return
+	}
+	limit, pool, dis := cur.DailyRequestLimit, cur.PoolOnlyCap, cur.Disabled
+	if in.DailyRequestLimit != nil {
+		limit = *in.DailyRequestLimit
+	}
+	if in.PoolOnlyCap != nil {
+		pool = *in.PoolOnlyCap
+	}
+	if in.Disabled != nil {
+		dis = *in.Disabled
+	}
+	t, err := s.r.UpdateTenantCap(r.Context(), id, limit, pool, dis)
+	if err != nil {
+		if errors.Is(err, types.ErrUnknownTenant) {
+			writeErr(w, 404, "no such tenant", nil)
+			return
+		}
+		writeErr(w, 400, err.Error(), nil)
+		return
+	}
+	writeJSON(w, 200, t)
 }

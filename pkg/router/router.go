@@ -70,6 +70,8 @@ type Router struct {
 	cands     []candidate
 	states    map[int64]*providerState
 	refreshed time.Time
+
+	vcache voiceCache // ElevenLabs voice lists, per provider
 }
 
 // New constructs a Router. It also ensures a default tenant exists (used by
@@ -255,27 +257,31 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 	if tenant.Disabled {
 		return nil, types.ErrTenantDisabled
 	}
-	if tenant.DailyRequestLimit > 0 {
-		loc := locFor(tenant.TZ)
-		day := start.In(loc).Format("2006-01-02")
-		if used, err := r.store.TenantDayUsage(ctx, tenant.ID, day); err == nil && used >= tenant.DailyRequestLimit {
-			now := start.In(loc)
-			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
-			return nil, &types.TenantLimitError{RetryAfter: next.Sub(now)}
-		}
+	ownOnly, capErr, err := r.capGate(ctx, tenant, start)
+	if err != nil {
+		return nil, err
 	}
 	msgs, err := buildMessages(req)
 	if err != nil {
 		return nil, err
 	}
 	cands := r.candidates(ctx, req)
+	if ownOnly {
+		if cands = onlyOwn(cands); len(cands) == 0 {
+			return nil, capErr // nothing of the tenant's own to fall back on
+		}
+	}
 	if len(cands) == 0 {
 		return nil, types.ErrNoProviders
 	}
 
 	var attempts []types.Attempt
 	failed := map[int64]bool{}
-	deadline := start.Add(r.maxWait)
+	wait := r.maxWait
+	if req.MaxWait > 0 {
+		wait = req.MaxWait
+	}
+	deadline := start.Add(wait)
 
 	// One overall budget for the whole request, failovers included.
 	parent := ctx
@@ -343,7 +349,7 @@ func (r *Router) Generate(ctx context.Context, req types.Request) (*types.Respon
 		text, tokens, hdr, err := r.callProvider(ctx, picked.cfg, msgs, req)
 		var out *types.Response
 		if err == nil {
-			out = &types.Response{Text: text, Provider: picked.cfg.Name, Model: picked.cfg.Model, Tokens: tokens}
+			out = &types.Response{Text: text, Provider: picked.cfg.Name, Model: picked.cfg.Model, Tokens: tokens, Own: picked.cfg.TenantID != ""}
 			if req.JSON {
 				if j, ok := extractJSON(text); ok {
 					out.JSON = j

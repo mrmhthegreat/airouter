@@ -70,7 +70,7 @@ func Provider(args []string) error {
 		fs.StringVar(&p.Model, "model", "", "exact model id")
 		fs.StringVar(&p.TenantID, "tenant", "", "restrict to one tenant (default: shared by all)")
 		fs.StringVar(&p.ResetTZ, "tz", "", "IANA timezone of the daily reset (e.g. America/Los_Angeles)")
-		fs.StringVar(&p.Category, "category", "", "text (default) | tts | stt — request shape this model expects")
+		fs.StringVar(&p.Category, "category", "", "text (default) | tts | stt | embed — request shape this model expects")
 		fs.IntVar(&p.Priority, "priority", 0, "lower = tried first")
 		fs.IntVar(&p.RPM, "rpm", 0, "requests per minute (0 = no local cap)")
 		fs.IntVar(&p.RPD, "rpd", 0, "requests per day (0 = no local cap)")
@@ -82,7 +82,7 @@ func Provider(args []string) error {
 		fs.BoolVar(&noJSON, "no-json-mode", false, "model rejects response_format (e.g. Gemma)")
 		fs.BoolVar(&noSystem, "no-system-role", false, "model rejects system messages (e.g. Gemma)")
 	}
-	_ = fs.Parse(rest)
+	_ = parseInterspersed(fs, rest)
 	r, err := OpenRouter(*db, router.TenantPolicy{AllowCustomBaseURL: true})
 	if err != nil {
 		return err
