@@ -19,8 +19,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mrmhthegreat/airouter"
@@ -90,8 +92,26 @@ func main() {
 	fmt.Printf("voice note: %s, %d bytes (%s)\n", note.Format, len(note.Audio), note.ContentType)
 
 	// 3. Clone the shop owner's voice. Consent is required.
-	if len(os.Args) > 1 { // go run ./examples/whatsapp_voice sample.mp3
-		data, err := os.ReadFile(os.Args[1])
+	if len(os.Args) > 1 {
+		path := os.Args[1]
+
+		if !filepath.IsLocal(path) {
+			log.Fatal("audio file must be inside the current directory")
+		}
+
+		root, err := os.OpenRoot(".")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer root.Close()
+
+		file, err := root.Open(path)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+
+		data, err := io.ReadAll(file)
 		if err != nil {
 			log.Fatal(err)
 		}
