@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -51,6 +52,7 @@ func convertAudio(ctx context.Context, in []byte, to string) (out []byte, conten
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	// #nosec G204 -- bin comes from exec.LookPath("ffmpeg"); the arguments are fixed flags built by this package, never user text.
 	cmd := exec.CommandContext(ctx, bin, append([]string{"-hide_banner", "-loglevel", "error", "-i", "pipe:0"}, append(args, "pipe:1")...)...)
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout, stderr bytes.Buffer
@@ -116,20 +118,42 @@ func ensureWAV(b []byte, contentType string) ([]byte, string) {
 	return pcmToWAV(b, rate, 1, 16), "audio/wav"
 }
 
+// le32 and le16 clamp an int into the unsigned field of a WAV header, so a
+// huge or negative value can never wrap around.
+func le32(n int) uint32 {
+	if n < 0 {
+		return 0
+	}
+	if int64(n) > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(n) // #nosec G115 -- clamped to 0..MaxUint32 above
+}
+
+func le16(n int) uint16 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxUint16 {
+		return math.MaxUint16
+	}
+	return uint16(n) // #nosec G115 -- clamped to 0..MaxUint16 above
+}
+
 // pcmToWAV prepends a 44-byte RIFF/WAVE header to little-endian PCM samples.
 func pcmToWAV(pcm []byte, rate, channels, bits int) []byte {
-	var h bytes.Buffer
-	h.WriteString("RIFF")
-	binary.Write(&h, binary.LittleEndian, uint32(36+len(pcm)))
-	h.WriteString("WAVEfmt ")
-	binary.Write(&h, binary.LittleEndian, uint32(16))
-	binary.Write(&h, binary.LittleEndian, uint16(1)) // PCM
-	binary.Write(&h, binary.LittleEndian, uint16(channels))
-	binary.Write(&h, binary.LittleEndian, uint32(rate))
-	binary.Write(&h, binary.LittleEndian, uint32(rate*channels*bits/8))
-	binary.Write(&h, binary.LittleEndian, uint16(channels*bits/8))
-	binary.Write(&h, binary.LittleEndian, uint16(bits))
-	h.WriteString("data")
-	binary.Write(&h, binary.LittleEndian, uint32(len(pcm)))
-	return append(h.Bytes(), pcm...)
+	h := make([]byte, 0, 44+len(pcm))
+	h = append(h, "RIFF"...)
+	h = binary.LittleEndian.AppendUint32(h, le32(36+len(pcm)))
+	h = append(h, "WAVEfmt "...)
+	h = binary.LittleEndian.AppendUint32(h, 16)
+	h = binary.LittleEndian.AppendUint16(h, 1) // PCM
+	h = binary.LittleEndian.AppendUint16(h, le16(channels))
+	h = binary.LittleEndian.AppendUint32(h, le32(rate))
+	h = binary.LittleEndian.AppendUint32(h, le32(rate*channels*bits/8))
+	h = binary.LittleEndian.AppendUint16(h, le16(channels*bits/8))
+	h = binary.LittleEndian.AppendUint16(h, le16(bits))
+	h = append(h, "data"...)
+	h = binary.LittleEndian.AppendUint32(h, le32(len(pcm)))
+	return append(h, pcm...)
 }
